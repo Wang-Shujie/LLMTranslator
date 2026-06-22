@@ -4,6 +4,7 @@ __pycache__/
 venv/
 dist/
 build/
+installer_output/
 *.egg-info/
 *.spec.bak
 .pytest_cache/
