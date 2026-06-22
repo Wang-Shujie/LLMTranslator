@@ -8,7 +8,7 @@ from llm_translator.auth.login import login_config
 from llm_translator.auth.store import CredentialStore
 
 try:
-    from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineUrlRequestInterceptor  # type: ignore
+    from PySide6.QtWebEngineCore import QWebEngineProfile  # type: ignore
     from PySide6.QtWebEngineWidgets import QWebEngineView  # type: ignore
     _HAS_WEBENGINE = True
 except Exception:  # pragma: no cover

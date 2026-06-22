@@ -19,7 +19,6 @@ def main() -> int:
         app.setStyleSheet(qss.read_text(encoding="utf-8"))
 
     # 安装 qasync loop
-    from llm_translator.ui.async_bridge import install_asyncio_loop
     import qasync  # type: ignore
     loop = qasync.QEventLoop(app)
     import asyncio
