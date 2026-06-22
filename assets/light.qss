@@ -1,0 +1,47 @@
+/* 主背景白，面板浅灰，强调蓝 #1890ff，边框 #e0e0e0，圆角 8px */
+QWidget {
+    background: #ffffff;
+    color: #000000;
+    font-size: 14px;
+}
+
+QToolBar, QStatusBar, #topBar, #statusBar {
+    background: #f8f8f8;
+    border: none;
+}
+
+QComboBox, QPushButton {
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 6px 12px;
+    color: #666666;
+}
+QComboBox:hover, QPushButton:hover {
+    border-color: #1890ff;
+    color: #000000;
+}
+QPushButton#primaryBtn {
+    background: #1890ff;
+    color: #ffffff;
+    border: none;
+}
+QPushButton#primaryBtn:hover {
+    background: #40a9ff;
+}
+
+QPlainTextEdit {
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 12px;
+}
+
+QLabel#secondary {
+    color: #666666;
+}
+
+QListWidget::item:selected {
+    background: #e6f7ff;
+    color: #1890ff;
+}
