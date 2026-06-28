@@ -83,7 +83,7 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.provider_combo.setCurrentIndex(idx)
         self.menu_btn = QPushButton("☰")
-        menu = QMenu()
+        menu = QMenu(self)  # 父对象 = 主窗口，避免无主 QMenu 被 GC 回收导致菜单丢失
         menu.addAction("设置", self.on_settings)
         menu.addAction("历史记录", self.open_history)
         menu.addAction("关于", self.on_about)
