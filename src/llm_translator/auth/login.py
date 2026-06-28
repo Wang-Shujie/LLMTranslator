@@ -1,23 +1,38 @@
-"""网页登录：每个 provider 的登录页 URL，以及从 QWebEngine 抓 token 的键名。"""
+"""网页登录配置：每个 provider 的登录页 URL + 抓取凭据的 JS。
+
+抓取分两段 JS（在已登录的页面上下文里执行）：
+- setup_js：页面加载后跑一次，用于发起异步请求（如 Kimi 用 refresh_token 换 access_token）。
+- poll_js：定时轮询，返回 token 字符串；非空即视为登录成功，存凭据并关闭弹窗。
+  为 None 表示尚不能自动抓取（靠 LoginDialog 的诊断日志定位真实键名后再补）。
+
+凭据位置以公开逆向项目为准：
+- DeepSeek：localStorage 的 userToken.value（xtekky/deepseek4free 核实）
+- Kimi：cookie refresh_token → POST /api/auth/refresh_token → access_token（LLM-Red-Team/kimi-free-api）
+- 智谱清言：公开资料未确认确切键名，暂只做诊断日志，待真机登录日志确认后补 poll_js。
+"""
 from __future__ import annotations
 
 LOGIN_CONFIG: dict[str, dict] = {
-    "glm-web": {
-        "url": "https://chatglm.cn/login",
-        "token_cookie": "token",        # VERIFY: 实际 cookie/localStorage 键名
-        "storage": "cookie",            # "cookie" | "localStorage"
+    "deepseek-web": {
+        "url": "https://chat.deepseek.com/sign_in",
+        "setup_js": None,
+        "poll_js": "(function(){try{var t=JSON.parse(localStorage.getItem('userToken'));return (t&&t.value)||''}catch(e){return ''}})()",
     },
     "kimi-web": {
         "url": "https://kimi.moonshot.cn/login",
-        # Kimi 的 token 通过 /api/auth/refresh_token 获取，登录后访问该接口抓 access_token
-        "extract_url": "https://kimi.moonshot.cn/api/auth/refresh_token",
-        "token_key": "access_token",
-        "storage": "api",
+        "setup_js": (
+            "fetch('https://kimi.moonshot.cn/api/auth/refresh_token',{credentials:'include'})"
+            ".then(function(r){return r.json()})"
+            ".then(function(d){window.__kimi_token=d.access_token||''})"
+            ".catch(function(){window.__kimi_token=''})"
+        ),
+        "poll_js": "window.__kimi_token||''",
     },
-    "deepseek-web": {
-        "url": "https://chat.deepseek.com/sign_in",
-        "token_cookie": "userToken",   # VERIFY
-        "storage": "cookie",
+    "glm-web": {
+        "url": "https://chatglm.cn/login",
+        # 键名未确认：暂不自动抓取，靠 LoginDialog 诊断日志（localStorage/cookie）定位真实 token。
+        "setup_js": None,
+        "poll_js": None,
     },
 }
 
