@@ -23,6 +23,12 @@ dev = [
     "pytest-asyncio>=0.23",
     "pyinstaller>=6",
 ]
+# DeepSeek 网页翻译的 PoW 求解需要跑 WASM，故为可选依赖（不影响核心/付费 API）。
+# 安装：pip install "llm-translator[web]"
+web = [
+    "wasmtime>=20",
+    "numpy>=1.26",
+]
 
 [project.scripts]
 llm-translator = "llm_translator.main:main"

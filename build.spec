@@ -24,6 +24,8 @@ a = Analysis(
     binaries=curl_cffi_binaries,
     datas=[
         ("assets/light.qss", "assets"),
+        # DeepSeek 网页 PoW 的 WASM（随包；wasmtime/numpy 为可选依赖，需另装 [web]）
+        ("src/llm_translator/providers/web/wasm", "llm_translator/providers/web/wasm"),
     ],
     hiddenimports=[
         "curl_cffi",
@@ -34,6 +36,9 @@ a = Analysis(
         "PySide6.QtWebEngineQuick",
         "qasync",
         "cryptography",
+        # 可选依赖：仅当安装了 [web] 时才用得上。PyInstaller 打包 DeepSeek 网页需带上。
+        "wasmtime",
+        "numpy",
     ],
     hookspath=[],
     runtime_hooks=[],

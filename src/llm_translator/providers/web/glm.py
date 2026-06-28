@@ -56,7 +56,7 @@ class GlmWebProvider(WebProviderBase):
             "User-Agent": "Mozilla/5.0",
         }
         async with AsyncSession(impersonate=_IMPERSONATE) as s:
-            async with s.post(_CHAT_URL, json=payload, headers=headers, stream=True, timeout=60) as resp:
+            async with s.stream("POST", _CHAT_URL, json=payload, headers=headers, timeout=60) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     # 直接行级解析（curl_cffi 流为字节行）
