@@ -24,13 +24,21 @@ _PRESET_BY_ID = {
 }
 
 
+def preset_for(provider_id: str) -> dict:
+    """返回 provider_id 对应的预设（base_url/model/label）。
+
+    provider 初始化与设置面板预填默认值共用此映射，避免两处分别硬编码。
+    未知 id 回落到 deepseek 预设。
+    """
+    return PRESETS[_PRESET_BY_ID.get(provider_id, "deepseek")]
+
+
 class OpenAICompatProvider(BaseProvider):
     kind = "api"
 
     def __init__(self, provider_id: str, credentials: CredentialStore) -> None:
         super().__init__(provider_id, credentials)
-        preset_key = _PRESET_BY_ID.get(provider_id, "deepseek")
-        preset = PRESETS[preset_key]
+        preset = preset_for(provider_id)
         # 用户可在凭据里覆盖 base_url / model（自定义供应商）
         self.base_url = credentials.get(provider_id, "base_url") or preset["base_url"]
         self.model = credentials.get(provider_id, "model") or preset["model"]

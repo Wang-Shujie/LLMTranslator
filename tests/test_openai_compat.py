@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from llm_translator.auth.store import CredentialStore
-from llm_translator.providers.api.openai_compat import OpenAICompatProvider, PRESETS
+from llm_translator.providers.api.openai_compat import OpenAICompatProvider, PRESETS, preset_for
 
 
 @pytest.fixture(autouse=True)
@@ -22,6 +22,18 @@ def _make_provider(provider_id="deepseek-api"):
 def test_presets_contain_expected():
     assert "deepseek" in PRESETS
     assert PRESETS["deepseek"]["base_url"].endswith("/v1")
+
+
+def test_preset_for_returns_matching_defaults():
+    # 每个 API provider_id 都能拿到对应的预设默认 base_url / model
+    assert preset_for("deepseek-api")["base_url"] == PRESETS["deepseek"]["base_url"]
+    assert preset_for("glm-api")["model"] == PRESETS["glm"]["model"]
+    assert preset_for("openai")["base_url"] == PRESETS["openai"]["base_url"]
+
+
+def test_preset_for_unknown_id_falls_back():
+    # 未知 id 回落到 deepseek，而不是抛 KeyError（UI 预填不能崩）
+    assert preset_for("does-not-exist") == PRESETS["deepseek"]
 
 
 def test_health_requires_key():

@@ -56,10 +56,22 @@ class SettingsDialog(QDialog):
             self.list_widget.setCurrentRow(0)
 
     def _clear_detail(self) -> None:
-        while self.detail_layout.count():
-            child = self.detail_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
+        # 递归清空布局（含子布局）并删除其中所有 widget。
+        # 旧实现只删直接 widget 子项，子布局（如保存/测试连接所在行）里的按钮不会被删，
+        # 切换面板时会作为孤儿残留显示且点击失效（BUG6）。
+        self._clear_layout(self.detail_layout)
+
+    def _clear_layout(self, layout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                # setParent(None) 立即把 widget 从 detail 摘除（不再渲染），
+                # 避免 deleteLater 异步未完成时残留显示（BUG6）。deleteLater 负责真正释放。
+                widget.setParent(None)
+                widget.deleteLater()
+            elif item.layout() is not None:
+                self._clear_layout(item.layout())
 
     def _on_select(self, row: int) -> None:
         if row < 0:
@@ -73,10 +85,13 @@ class SettingsDialog(QDialog):
 
     def _build_api_panel(self, meta: dict) -> None:
         pid = meta["id"]
-        self._api_base = QLineEdit(self.credentials.get(pid, "base_url") or "")
+        from llm_translator.providers.api.openai_compat import preset_for
+        preset = preset_for(pid)
+        # base_url / model 预填预设默认值，方便用户直接配置；API Key 无默认，留空
+        self._api_base = QLineEdit(self.credentials.get(pid, "base_url") or preset["base_url"])
         self._api_key = QLineEdit(self.credentials.get(pid, "api_key") or "")
         self._api_key.setEchoMode(QLineEdit.Password)
-        self._api_model = QLineEdit(self.credentials.get(pid, "model") or "")
+        self._api_model = QLineEdit(self.credentials.get(pid, "model") or preset["model"])
         save_btn = QPushButton("保存")
         test_btn = QPushButton("测试连接")
         status = QLabel("")
