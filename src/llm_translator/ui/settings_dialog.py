@@ -118,18 +118,26 @@ class SettingsDialog(QDialog):
     def _test_api(self, pid: str, status: QLabel) -> None:
         self._save_api(pid, status)
         from llm_translator.providers.registry import get_provider
+        import asyncio
+        import threading
 
-        async def go():
-            try:
-                p = get_provider(pid, self.credentials)
+        credentials = self.credentials
+
+        def worker() -> None:
+            async def go():
+                p = get_provider(pid, credentials)
                 await p.login()
                 async for _ in p.translate("hello", "en", "zh"):
                     break  # 只取首 token 即说明连通
                 status.setText("● 已连接")
+            try:
+                asyncio.run(go())
             except Exception as e:
                 status.setText(f"✕ 失败：{e}")
 
-        asyncio.get_event_loop().create_task(go())
+        # httpx 同样要求真实 asyncio 循环，qasync 下会报 "no async event loop"，
+        # 故在线程里 asyncio.run 跑；status 是 QLabel，setText 跨线程安全（Queued）。
+        threading.Thread(target=worker, daemon=True).start()
 
     def _build_web_panel(self, meta: dict) -> None:
         pid = meta["id"]

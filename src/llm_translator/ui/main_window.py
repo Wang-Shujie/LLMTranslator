@@ -160,28 +160,13 @@ class MainWindow(QMainWindow):
 
         src = self.src_combo.currentData()
         tgt = self.tgt_combo.currentData()
+        self._run_translate(text, src, tgt)
 
-        # 网页 provider 用 curl_cffi，其异步客户端要求真实 asyncio 事件循环；
-        # 而 qasync 不是标准 asyncio loop，curl_cffi 会 RuntimeError(no running event loop)。
-        # 故网页翻译放进 worker 线程里用 asyncio.run 跑，token 经 Qt 信号回到主线程。
-        if self.translator.provider.kind == "web":
-            self._run_web_translate(text, src, tgt)
-            return
-
-        async def run():
-            collected = []
-            try:
-                async for tok in self.translator.translate(text, src, tgt):
-                    collected.append(tok)
-                    self.emitter.token_received.emit(tok)
-                self.emitter.finished.emit("".join(collected))
-            except Exception as e:  # Provider 隔离：错误只反馈给 UI
-                self.emitter.error.emit(str(e))
-
-        loop = asyncio.get_event_loop()
-        self._current_task = loop.create_task(run())
-
-    def _run_web_translate(self, text: str, src: str, tgt: str) -> None:
+    def _run_translate(self, text: str, src: str, tgt: str) -> None:
+        # 所有 provider（API 用 httpx、网页用 curl_cffi）的异步客户端都要求真实 asyncio
+        # 事件循环；而 qasync 不是标准 asyncio loop，会报 "no running event loop" /
+        # "Not currently running on any asynchronous event loop"。故统一放进 worker 线程
+        # 用 asyncio.run 跑，token 经 Qt 信号（跨线程自动 QueuedConnection）回到主线程。
         translator = self.translator
         emitter = self.emitter
 

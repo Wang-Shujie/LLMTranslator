@@ -31,3 +31,21 @@ class _byte_stream:
     async def __aiter__(self):
         for line in self._lines:
             yield line
+
+
+class _str_stream:
+    """模拟 httpx aiter_lines() 的真实行为：按行产出 str（BUG9）。"""
+    def __init__(self, data: str):
+        self._lines = data.split("\n")
+
+    async def __aiter__(self):
+        for line in self._lines:
+            yield line
+
+
+@pytest.mark.asyncio
+async def test_handles_str_lines_like_httpx():
+    # httpx 的 aiter_lines() 产出 str 而非 bytes
+    raw = "data: {\"a\":1}\n\ndata: {\"a\":2}\n\n"
+    events = [e async for e in parse_sse(_str_stream(raw))]
+    assert events == [{"a": 1}, {"a": 2}]

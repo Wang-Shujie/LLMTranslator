@@ -8,6 +8,7 @@ import httpx
 from llm_translator.auth.store import CredentialStore
 from llm_translator.core.prompt import build_messages
 from llm_translator.providers.base import AuthError, BaseProvider
+from llm_translator.utils.proxy import force_direct_for_dead_proxy
 from llm_translator.utils.sse import parse_sse
 
 PRESETS: dict[str, dict] = {
@@ -68,7 +69,9 @@ class OpenAICompatProvider(BaseProvider):
             "temperature": 0.3,
         }
         headers = {"Authorization": f"Bearer {self._api_key()}"}
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+        # 系统配了连不上的代理（如 Clash 残留 127.0.0.1:7890）时直连，否则尊重系统代理
+        trust_env = not force_direct_for_dead_proxy()
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0), trust_env=trust_env) as client:
             async with client.stream("POST", f"{self.base_url}/chat/completions", json=payload, headers=headers) as resp:
                 if resp.status_code == 401:
                     raise AuthError(f"{self.name} API Key 无效")
