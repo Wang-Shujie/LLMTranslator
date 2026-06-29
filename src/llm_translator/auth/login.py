@@ -7,7 +7,7 @@
 
 凭据位置以公开逆向项目为准：
 - DeepSeek：localStorage 的 userToken.value（xtekky/deepseek4free 核实）
-- Kimi：cookie refresh_token → POST /api/auth/refresh_token → access_token（LLM-Red-Team/kimi-free-api）
+- Kimi：www.kimi.com，登录后 access_token 直接存于 localStorage（真机日志确认）
 - 智谱清言：公开资料未确认确切键名，暂只做诊断日志，待真机登录日志确认后补 poll_js。
 """
 from __future__ import annotations
@@ -19,14 +19,10 @@ LOGIN_CONFIG: dict[str, dict] = {
         "poll_js": "(function(){try{var t=JSON.parse(localStorage.getItem('userToken'));return (t&&t.value)||''}catch(e){return ''}})()",
     },
     "kimi-web": {
-        "url": "https://kimi.moonshot.cn/login",
-        "setup_js": (
-            "fetch('https://kimi.moonshot.cn/api/auth/refresh_token',{credentials:'include'})"
-            ".then(function(r){return r.json()})"
-            ".then(function(d){window.__kimi_token=d.access_token||''})"
-            ".catch(function(){window.__kimi_token=''})"
-        ),
-        "poll_js": "window.__kimi_token||''",
+        "url": "https://www.kimi.com/",
+        # Kimi 登录后 access_token 直接存于 localStorage（真机日志确认），轮询读取即可
+        "setup_js": None,
+        "poll_js": "localStorage.getItem('access_token') || ''",
     },
     "glm-web": {
         "url": "https://chatglm.cn/login",
