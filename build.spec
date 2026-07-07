@@ -2,6 +2,7 @@
 # PyInstaller 打包配置。验证：pyinstaller build.spec
 import os
 from PySide6 import __path__ as pyside_paths
+from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
 
@@ -39,6 +40,9 @@ a = Analysis(
         # 可选依赖：仅当安装了 [web] 时才用得上。PyInstaller 打包 DeepSeek 网页需带上。
         "wasmtime",
         "numpy",
+        # 注册表用 importlib 懒加载 web providers，PyInstaller 静态分析看不见，
+        # 必须显式收集整个 llm_translator 包（含 glm/kimi/deepseek/login_dialog 等）
+        *collect_submodules("llm_translator"),
     ],
     hookspath=[],
     runtime_hooks=[],
