@@ -4,10 +4,12 @@ from __future__ import annotations
 import asyncio
 import threading
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QObject, Qt, QByteArray, QPoint, QRectF, QSize, Signal
+from PySide6.QtGui import QColor, QCursor, QIcon, QKeySequence, QMouseEvent, QPainter, QPen, QPixmap, QShortcut
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
-    QComboBox,
+    QApplication,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -15,7 +17,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QStatusBar,
+    QSizeGrip,
+    QSystemTrayIcon,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -30,12 +34,223 @@ from llm_translator.ui.async_bridge import TokenEmitter
 from llm_translator.ui.settings_dialog import SettingsDialog
 from llm_translator.ui.history_dialog import HistoryDialog
 
+# 简洁黑白图标，按颜色渲染（小尺寸下也清晰）。
+# 置顶：实心图钉（圆头 + 锥形针体）
+_PIN_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="{color}">'
+    '<circle cx="12" cy="6" r="5"/>'
+    '<path d="M8.5 10 L15.5 10 L13 22 L11 22 Z"/>'
+    "</svg>"
+)
+# 最小化到托盘：下箭头 + 底线
+_DOWN_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+    'stroke="{color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'
+    '<line x1="12" y1="4" x2="12" y2="15"/>'
+    '<polyline points="7 11 12 16 17 11"/>'
+    '<line x1="5" y1="20" x2="19" y2="20"/>'
+    "</svg>"
+)
+# 菜单：三条横线（☰）
+_MENU_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+    'stroke="{color}" stroke-width="2.2" stroke-linecap="round">'
+    '<line x1="4" y1="7" x2="20" y2="7"/>'
+    '<line x1="4" y1="12" x2="20" y2="12"/>'
+    '<line x1="4" y1="17" x2="20" y2="17"/>'
+    "</svg>"
+)
+
+
+def _svg_icon(svg_template: str, color: str, size: int = 18) -> QIcon:
+    """按颜色把 SVG 模板渲染为图标（2x 像素比，HiDPI 下清晰）。"""
+    renderer = QSvgRenderer(QByteArray(svg_template.format(color=color).encode("utf-8")))
+    scale = 2
+    pix = QPixmap(size * scale, size * scale)
+    pix.setDevicePixelRatio(scale)
+    pix.fill(Qt.transparent)
+    painter = QPainter(pix)
+    # 必须显式给目标矩形，否则 QSvgRenderer 按默认尺寸绘制 → 内容偏到右下并被裁切
+    renderer.render(painter, QRectF(0, 0, size, size))
+    painter.end()
+    return QIcon(pix)
+
+
+class MenuButton(QPushButton):
+    """按钮 + 弹出菜单，模拟 QComboBox 的常用接口（currentIndex/currentData/findData/
+    currentIndexChanged），外观复用 QPushButton 样式 → 与 ☰ 菜单按钮一致。
+    """
+
+    currentIndexChanged = Signal(int)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._items: list[tuple[str, object]] = []
+        self._index = -1
+        self._menu = QMenu(self)  # 父对象 = 按钮，避免无主 QMenu 被 GC 回收
+        self.setMenu(self._menu)
+        self._menu.aboutToShow.connect(self._sync_menu)
+
+    def addItems(self, items: list[tuple[str, object]]) -> None:
+        self._items = list(items)
+
+    def _sync_menu(self) -> None:
+        self._menu.clear()
+        for i, (label, _data) in enumerate(self._items):
+            act = self._menu.addAction(label, lambda _checked=False, i=i: self.setCurrentIndex(i))
+            act.setCheckable(True)
+            act.setChecked(i == self._index)
+
+    def currentIndex(self) -> int:
+        return self._index
+
+    def setCurrentIndex(self, idx: int) -> None:
+        if idx == self._index or not (0 <= idx < len(self._items)):
+            return
+        self._index = idx
+        self.setText(self._items[idx][0])
+        self.currentIndexChanged.emit(idx)
+
+    def currentData(self):
+        return self._items[self._index][1] if 0 <= self._index < len(self._items) else None
+
+    def findData(self, data) -> int:
+        for i, (_label, d) in enumerate(self._items):
+            if d == data:
+                return i
+        return -1
+
+
+class _Status(QLabel):
+    """状态标签（替代 QStatusBar）。保留 showMessage 接口，方便沿用旧调用点。"""
+
+    def showMessage(self, text: str, msec: int = 0) -> None:
+        self.setText(text)
+
+
+class _RoundedFrame(QFrame):
+    """圆角白色容器：自绘圆角白底+边框（配合窗口 WA_TranslucentBackground 实现真圆角，
+    QSS border-radius 无法裁剪透明）。"""
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor("#d0d0d0"), 1))
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 10, 10)
+
+
+class _ResizeFilter(QObject):
+    """无边框窗口的边缘缩放：装在 QApplication 上，鼠标在窗口边缘 6px 内按下时
+    调用 startSystemResize 由系统接管缩放；并在悬停时换成缩放光标。"""
+
+    EDGE = 6
+
+    def __init__(self, window: QMainWindow) -> None:
+        super().__init__(window)
+        self._win = window
+        self._overriding = False
+
+    def _edges(self, gp: QPoint) -> Qt.Edge:
+        wr = self._win.geometry()
+        e = Qt.Edge(0)
+        if 0 <= gp.x() - wr.left() <= self.EDGE:
+            e |= Qt.LeftEdge
+        if 0 <= wr.right() - gp.x() <= self.EDGE:
+            e |= Qt.RightEdge
+        if 0 <= gp.y() - wr.top() <= self.EDGE:
+            e |= Qt.TopEdge
+        if 0 <= wr.bottom() - gp.y() <= self.EDGE:
+            e |= Qt.BottomEdge
+        return e
+
+    @staticmethod
+    def _cursor_for(e: Qt.Edge):
+        horiz = bool(e & (Qt.LeftEdge | Qt.RightEdge))
+        vert = bool(e & (Qt.TopEdge | Qt.BottomEdge))
+        if horiz and vert:
+            return Qt.SizeFDiagCursor if (e & Qt.LeftEdge and e & Qt.TopEdge) or \
+                (e & Qt.RightEdge and e & Qt.BottomEdge) else Qt.SizeBDiagCursor
+        if horiz:
+            return Qt.SizeHorCursor
+        if vert:
+            return Qt.SizeVerCursor
+        return None
+
+    def eventFilter(self, _obj, event) -> bool:
+        et = event.type()
+        if et == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            edges = self._edges(event.globalPosition().toPoint())
+            if edges and self._win.windowHandle() is not None:
+                self._win.windowHandle().startSystemResize(edges)
+                return True
+        elif et == QEvent.MouseMove:
+            cur = self._cursor_for(self._edges(event.globalPosition().toPoint()))
+            if cur is not None:
+                if not self._overriding:
+                    QApplication.setOverrideCursor(QCursor(cur))
+                    self._overriding = True
+                else:
+                    QApplication.changeOverrideCursor(QCursor(cur))
+            elif self._overriding:
+                QApplication.restoreOverrideCursor()
+                self._overriding = False
+        return False
+
+
+class TitleBar(QWidget):
+    """自绘标题栏：左侧应用控制按钮（外部 addWidget），右侧窗口控制；
+    按住拖动移动窗口，双击最大化/还原。仅响应空白区域（点到按钮不触发拖动）。"""
+
+    def __init__(self, window: QMainWindow) -> None:
+        super().__init__(window)
+        self._win = window
+        self._drag_pos: QPoint | None = None
+        self.setObjectName("titleBar")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(6, 2, 2, 2)
+        lay.setSpacing(4)
+        self._left = QHBoxLayout()
+        self._left.setSpacing(4)
+        self._right = QHBoxLayout()
+        self._right.setSpacing(0)
+        lay.addLayout(self._left)
+        lay.addStretch()
+        lay.addLayout(self._right)
+
+    def add_left(self, w: QWidget) -> None:
+        self._left.addWidget(w)
+
+    def add_right(self, w: QWidget) -> None:
+        self._right.addWidget(w)
+
+    def mousePressEvent(self, e: QMouseEvent) -> None:
+        if e.button() == Qt.LeftButton:
+            self._drag_pos = e.globalPosition().toPoint() - self._win.pos()
+
+    def mouseMoveEvent(self, e: QMouseEvent) -> None:
+        if self._drag_pos is not None and (e.buttons() & Qt.LeftButton):
+            self._win.move(e.globalPosition().toPoint() - self._drag_pos)
+
+    def mouseReleaseEvent(self, e: QMouseEvent) -> None:
+        self._drag_pos = None
+
+    def mouseDoubleClickEvent(self, e: QMouseEvent) -> None:
+        self._win.showNormal() if self._win.isMaximized() else self._win.showMaximized()
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("LLM 翻译")
-        self.resize(720, 560)
+        # 无边框 + 透明背景：自绘标题栏与圆角
+        self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint | Qt.Window)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        # widget 级样式优先级最高：强制主窗口透明，否则 app 级 QWidget{background:#fff}
+        # 会把窗口画成不透明白底，圆角失效。
+        self.setStyleSheet("QMainWindow { background: transparent; }")
+        self.resize(480, 360)
+        self.setMinimumSize(380, 300)
 
         # 持久化与编排
         self.settings = Settings.load()
@@ -43,10 +258,16 @@ class MainWindow(QMainWindow):
         self.history = HistoryStore()
         self.emitter = TokenEmitter()
         self._current_task = None
+        self._tray: QSystemTrayIcon | None = None
         self._build_translator()
 
         self._build_ui()
         self._wire_signals()
+        self._build_tray()
+        # 无边框窗口边缘缩放（任何边/角都可拖动缩放）
+        if QApplication.instance() is not None:
+            self._resize_filter = _ResizeFilter(self)
+            QApplication.instance().installEventFilter(self._resize_filter)
 
     def _build_translator(self) -> None:
         pid = self.settings.default_provider
@@ -61,41 +282,95 @@ class MainWindow(QMainWindow):
 
     # ---- UI 构建 ----
     def _build_ui(self) -> None:
-        central = QWidget()
+        # central = 圆角白色容器（窗口本身透明，由它承载内容 + 圆角）
+        central = _RoundedFrame()
+        central.setObjectName("central")
         root = QVBoxLayout(central)
-        root.setContentsMargins(12, 8, 12, 8)
-        root.setSpacing(8)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # 顶部语言栏
-        top = QHBoxLayout()
-        self.src_combo = QComboBox()
-        self.tgt_combo = QComboBox()
-        for code, name in LANGUAGES.items():
-            self.src_combo.addItem(name, code)
-            self.tgt_combo.addItem(name, code)
-        self.src_combo.setCurrentIndex(self.src_combo.findData(self.settings.src_lang))
-        self.tgt_combo.setCurrentIndex(self.tgt_combo.findData(self.settings.tgt_lang))
-        self.swap_btn = QPushButton("⇄")
-        self.swap_btn.setFixedWidth(40)
-        self.provider_combo = QComboBox()
-        for p in all_providers():
-            self.provider_combo.addItem(p["label"], p["id"])
-        idx = self.provider_combo.findData(self.settings.default_provider)
-        if idx >= 0:
-            self.provider_combo.setCurrentIndex(idx)
-        self.menu_btn = QPushButton("☰")
-        menu = QMenu(self)  # 父对象 = 主窗口，避免无主 QMenu 被 GC 回收导致菜单丢失
+        # ---- 自绘标题栏：左 [最小化到托盘][置顶][☰]，右 [—][☐][✕] ----
+        self.title_bar = TitleBar(self)
+        icon_qss = (
+            "QToolButton { border: 1px solid #e0e0e0; border-radius: 8px; background: #ffffff; padding: 0; }"
+            "QToolButton:hover { border-color: #1890ff; }"
+        )
+        self.tray_min_btn = QToolButton()
+        self.tray_min_btn.setObjectName("iconBtn")
+        self.tray_min_btn.setFixedSize(28, 28)
+        self.tray_min_btn.setIcon(_svg_icon(_DOWN_SVG, "#333333"))
+        self.tray_min_btn.setIconSize(QSize(18, 18))
+        self.tray_min_btn.setToolTip("最小化到系统托盘")
+        self.tray_min_btn.setStyleSheet(icon_qss)
+        self.pin_btn = QToolButton()
+        self.pin_btn.setObjectName("pinBtn")
+        self.pin_btn.setCheckable(True)
+        self.pin_btn.setFixedSize(28, 28)
+        self.pin_btn.setIcon(_svg_icon(_PIN_SVG, "#333333"))
+        self.pin_btn.setIconSize(QSize(18, 18))
+        self.pin_btn.setToolTip("置顶（始终显示在最前）")
+        self.pin_btn.setStyleSheet(
+            "QToolButton { border: 1px solid #e0e0e0; border-radius: 8px; background: #ffffff; padding: 0; }"
+            "QToolButton:checked { background: #1890ff; border: none; }"
+        )
+        self.menu_btn = QToolButton()
+        self.menu_btn.setObjectName("menuBtn")
+        self.menu_btn.setFixedSize(28, 28)
+        self.menu_btn.setIcon(_svg_icon(_MENU_SVG, "#333333"))
+        self.menu_btn.setIconSize(QSize(18, 18))
+        self.menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        # 与置顶/最小化图标按钮同款（QToolButton 图标居中）；隐藏菜单指示箭头
+        self.menu_btn.setStyleSheet(
+            "QToolButton { border: 1px solid #e0e0e0; border-radius: 8px; background: #ffffff; padding: 0; }"
+            "QToolButton:hover { border-color: #1890ff; }"
+            "QToolButton::menu-indicator { image: none; }"
+        )
+        self._main_menu = menu = QMenu(self)  # 父对象 = 主窗口 + 存引用，避免无主 QMenu 被 GC 回收
         menu.addAction("设置", self.on_settings)
         menu.addAction("历史记录", self.open_history)
         menu.addAction("关于", self.on_about)
         self.menu_btn.setMenu(menu)
+        for w in (self.tray_min_btn, self.pin_btn, self.menu_btn):
+            self.title_bar.add_left(w)
+        # 窗口控制按钮（无边框文字按钮）
+        ctl_qss = "QPushButton { border: none; background: transparent; font-size: 13px; padding: 0 8px; } QPushButton:hover { background: #e5e5e5; }"
+        self.win_min_btn = QPushButton("—"); self.win_min_btn.setFixedSize(40, 26); self.win_min_btn.setStyleSheet(ctl_qss)
+        self.win_max_btn = QPushButton("☐"); self.win_max_btn.setFixedSize(40, 26); self.win_max_btn.setStyleSheet(ctl_qss)
+        self.win_close_btn = QPushButton("✕"); self.win_close_btn.setFixedSize(40, 26)
+        self.win_close_btn.setStyleSheet("QPushButton { border: none; background: transparent; font-size: 13px; padding: 0 8px; } QPushButton:hover { background: #e81123; color: #ffffff; }")
+        for w in (self.win_min_btn, self.win_max_btn, self.win_close_btn):
+            self.title_bar.add_right(w)
+        root.addWidget(self.title_bar)
+
+        # ---- 内容区 ----
+        body = QWidget()
+        body.setObjectName("body")
+        body_lay = QVBoxLayout(body)
+        body_lay.setContentsMargins(12, 4, 12, 8)
+        body_lay.setSpacing(8)
+
+        # 语言栏（控制键已移到标题栏，这里只剩语言/模型）
+        top = QHBoxLayout()
+        lang_items = [(name, code) for code, name in LANGUAGES.items()]
+        self.src_combo = MenuButton()
+        self.src_combo.addItems(lang_items)
+        self.src_combo.setCurrentIndex(self.src_combo.findData(self.settings.src_lang))
+        self.tgt_combo = MenuButton()
+        self.tgt_combo.addItems(lang_items)
+        self.tgt_combo.setCurrentIndex(self.tgt_combo.findData(self.settings.tgt_lang))
+        self.swap_btn = QPushButton("⇄")
+        self.swap_btn.setFixedWidth(40)
+        self.provider_combo = MenuButton()
+        self.provider_combo.addItems([(p["label"], p["id"]) for p in all_providers()])
+        idx = self.provider_combo.findData(self.settings.default_provider)
+        if idx >= 0:
+            self.provider_combo.setCurrentIndex(idx)
         top.addWidget(self.src_combo)
         top.addWidget(self.swap_btn)
         top.addWidget(self.tgt_combo)
         top.addStretch()
         top.addWidget(self.provider_combo)
-        top.addWidget(self.menu_btn)
-        root.addLayout(top)
+        body_lay.addLayout(top)
 
         # 源文本输入
         self.src_edit = QPlainTextEdit()
@@ -107,12 +382,12 @@ class MainWindow(QMainWindow):
         col.addWidget(self.clear_btn)
         col.addStretch()
         input_row.addLayout(col)
-        root.addLayout(input_row, stretch=5)
+        body_lay.addLayout(input_row, stretch=5)
 
         # 翻译按钮
         self.translate_btn = QPushButton("翻译  (Ctrl+Enter)")
         self.translate_btn.setObjectName("primaryBtn")
-        root.addWidget(self.translate_btn)
+        body_lay.addWidget(self.translate_btn)
 
         # 译文输出
         self.tgt_edit = QPlainTextEdit()
@@ -125,13 +400,19 @@ class MainWindow(QMainWindow):
         out_col.addWidget(self.copy_btn)
         out_col.addStretch()
         out_row.addLayout(out_col)
-        root.addLayout(out_row, stretch=5)
+        body_lay.addLayout(out_row, stretch=5)
 
-        # 状态栏
-        self.status = QStatusBar()
-        self.setStatusBar(self.status)
+        # 状态 + 右下角缩放手柄
+        bottom = QHBoxLayout()
+        self.status = _Status()
+        self.status.setStyleSheet("color: #888; font-size: 12px;")
+        bottom.addWidget(self.status)
+        bottom.addStretch()
+        bottom.addWidget(QSizeGrip(self), 0, Qt.AlignRight | Qt.AlignBottom)
+        body_lay.addLayout(bottom)
         self._update_status()
 
+        root.addWidget(body, stretch=1)
         self.setCentralWidget(central)
 
     # ---- 信号 ----
@@ -140,6 +421,11 @@ class MainWindow(QMainWindow):
         self.clear_btn.clicked.connect(lambda: self.src_edit.clear())
         self.copy_btn.clicked.connect(self.on_copy)
         self.swap_btn.clicked.connect(self.on_swap)
+        self.pin_btn.toggled.connect(self.on_pin)
+        self.tray_min_btn.clicked.connect(self._minimize_to_tray)
+        self.win_min_btn.clicked.connect(self.showMinimized)
+        self.win_max_btn.clicked.connect(self._toggle_maximize)
+        self.win_close_btn.clicked.connect(QApplication.quit)
         self.provider_combo.currentIndexChanged.connect(self.on_provider_changed)
         self.emitter.token_received.connect(self._on_token)
         self.emitter.finished.connect(self._on_finished)
@@ -197,13 +483,56 @@ class MainWindow(QMainWindow):
         self.status.showMessage(f"错误：{msg}", 5000)
 
     def on_copy(self) -> None:
-        from PySide6.QtWidgets import QApplication
         QApplication.clipboard().setText(self.tgt_edit.toPlainText())
 
     def on_swap(self) -> None:
         si, ti = self.src_combo.currentIndex(), self.tgt_combo.currentIndex()
         self.src_combo.setCurrentIndex(ti)
         self.tgt_combo.setCurrentIndex(si)
+
+    def on_pin(self, on: bool) -> None:
+        """切换窗口始终置顶。改变窗口标志后需重新 show 才生效；图标随状态变色。"""
+        self.pin_btn.setIcon(_svg_icon(_PIN_SVG, "#ffffff" if on else "#333333"))
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
+        self.show()
+
+    def _toggle_maximize(self) -> None:
+        self.showNormal() if self.isMaximized() else self.showMaximized()
+
+    # ---- 系统托盘（最小化到托盘）----
+    def _build_tray(self) -> None:
+        """构建系统托盘图标。无系统托盘（如 offscreen/测试）时跳过，不影响主功能。"""
+        try:
+            if not QSystemTrayIcon.isSystemTrayAvailable():
+                self._tray = None
+                return
+            self._tray = QSystemTrayIcon(_svg_icon(_PIN_SVG, "#1890ff", 32), self)
+            self._tray.setToolTip("LLMTranslator")
+            menu = QMenu(self)
+            menu.addAction("显示主窗口", self._restore_from_tray)
+            menu.addSeparator()
+            menu.addAction("退出", QApplication.quit)
+            self._tray.setContextMenu(menu)
+            self._tray.activated.connect(self._on_tray_activated)
+            self._tray.show()
+        except Exception:
+            self._tray = None  # 托盘是可选的，任何失败都不影响主窗口
+
+    def _restore_from_tray(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _on_tray_activated(self, reason) -> None:
+        if reason == QSystemTrayIcon.DoubleClick:
+            self._restore_from_tray()
+
+    def _minimize_to_tray(self) -> None:
+        if self._tray is not None:
+            self.hide()
+            self._tray.showMessage("LLMTranslator", "已最小化到托盘，双击托盘图标恢复")
+        else:
+            self.showMinimized()  # 无系统托盘 → 退化为普通最小化
 
     def on_provider_changed(self, _idx: int) -> None:
         pid = self.provider_combo.currentData()

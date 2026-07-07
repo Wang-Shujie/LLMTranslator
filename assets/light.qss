@@ -5,6 +5,15 @@ QWidget {
     font-size: 14px;
 }
 
+/* 无边框圆角窗口：主窗口透明，圆角白底由 _RoundedFrame 自绘；
+   容器（标题栏/内容区）也透明，露出圆角绘制，避免方角盖住圆角 */
+QMainWindow {
+    background: transparent;
+}
+QFrame#central, QWidget#titleBar, QWidget#body {
+    background: transparent;
+}
+
 QToolBar, QStatusBar, #topBar, #statusBar {
     background: #f8f8f8;
     border: none;
