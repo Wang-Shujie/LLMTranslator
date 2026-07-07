@@ -2,9 +2,13 @@
 # PyInstaller 打包配置。验证：pyinstaller build.spec
 import os
 from PySide6 import __path__ as pyside_paths
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_all
 
 block_cipher = None
+
+# wasmtime（DeepSeek 网页 PoW 用）的平台 native dll（win32-x86_64/_wasmtime.dll）由 ctypes
+# 运行时加载，PyInstaller 静态分析看不见，必须整体收集包的 datas/binaries/submodules
+_wasmtime_datas, _wasmtime_binaries, _wasmtime_hi = collect_all("wasmtime")
 
 # curl_cffi 自带 impersonate 动态库，需随包
 curl_cffi_binaries = []
@@ -22,11 +26,12 @@ except ImportError:
 a = Analysis(
     ["src/llm_translator/main.py"],
     pathex=["src"],
-    binaries=curl_cffi_binaries,
+    binaries=[*curl_cffi_binaries, *_wasmtime_binaries],
     datas=[
         ("assets/light.qss", "assets"),
         # DeepSeek 网页 PoW 的 WASM（随包；wasmtime/numpy 为可选依赖，需另装 [web]）
         ("src/llm_translator/providers/web/wasm", "llm_translator/providers/web/wasm"),
+        *_wasmtime_datas,
     ],
     hiddenimports=[
         "curl_cffi",
@@ -37,12 +42,11 @@ a = Analysis(
         "PySide6.QtWebEngineQuick",
         "qasync",
         "cryptography",
-        # 可选依赖：仅当安装了 [web] 时才用得上。PyInstaller 打包 DeepSeek 网页需带上。
-        "wasmtime",
         "numpy",
         # 注册表用 importlib 懒加载 web providers，PyInstaller 静态分析看不见，
         # 必须显式收集整个 llm_translator 包（含 glm/kimi/deepseek/login_dialog 等）
         *collect_submodules("llm_translator"),
+        *_wasmtime_hi,
     ],
     hookspath=[],
     runtime_hooks=[],
