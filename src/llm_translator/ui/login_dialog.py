@@ -80,6 +80,12 @@ class LoginDialog(QDialog):
         if name and name not in self._cookies:
             self._cookies[name] = value
             self._log(f"cookie: {name}={value[:30]}")
+        # cookie 抓取（智谱清言等登录态在 cookie 的 provider）
+        target = self.cfg.get("token_cookie")
+        if target and name == target and value:
+            self.credentials.set(self.provider_id, "token", value)
+            self._poll.stop()
+            self.accept()
 
     # ---- 抓取 ----
     def _poll_capture(self) -> None:
