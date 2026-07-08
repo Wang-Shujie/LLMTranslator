@@ -42,3 +42,23 @@ async def test_sets_current_provider(data_dir):
     new_p = _FakeProvider()
     t.set_provider(new_p, "new")
     assert t.provider_label == "new"
+
+
+@pytest.mark.asyncio
+async def test_save_history_true_by_default_writes_history(data_dir):
+    provider = _FakeProvider()
+    history = HistoryStore()
+    t = Translator(provider=provider, history=history, provider_label="p")
+    async for _ in t.translate("你好", "zh", "en"):
+        pass
+    assert len(history.list(limit=10)) == 1
+
+
+@pytest.mark.asyncio
+async def test_save_history_false_skips_history(data_dir):
+    provider = _FakeProvider()
+    history = HistoryStore()
+    t = Translator(provider=provider, history=history, provider_label="p")
+    async for _ in t.translate("你好", "zh", "en", save_history=False):
+        pass
+    assert len(history.list(limit=10)) == 0
