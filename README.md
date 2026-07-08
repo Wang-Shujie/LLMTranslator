@@ -21,7 +21,7 @@ python -m llm_translator.main  # 启动
 pyinstaller build.spec --noconfirm
 "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 ```
-产物：`installer_output/LLMTranslator-Setup-0.1.0.exe`（双击即装）。
+产物：`installer_output/LLMTranslator-Setup-0.2.0.exe`（双击即装）。
 
 ## 首次使用
 1. 安装后启动，点右上角 ☰ 设置。

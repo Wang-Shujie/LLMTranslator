@@ -1,6 +1,6 @@
 ; Inno Setup 脚本。用 ISCC 编译：iscc installer.iss
 #define MyAppName "LLMTranslator"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.2.0"
 #define MyAppPublisher "LLMTranslator"
 #define MyAppExeName "LLMTranslator.exe"
 
