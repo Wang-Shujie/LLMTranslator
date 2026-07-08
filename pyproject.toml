@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-translator"
-version = "0.1.0"
+version = "0.2.0"
 description = "跨平台桌面级大模型翻译软件"
 requires-python = ">=3.11"
 dependencies = [
