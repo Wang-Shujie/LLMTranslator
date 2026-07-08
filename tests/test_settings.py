@@ -19,3 +19,19 @@ def test_save_and_reload(data_dir):
     reloaded = Settings.load()
     assert reloaded.tgt_lang == "ja"
     assert reloaded.enabled_providers == ["deepseek-api", "glm-web"]
+
+
+def test_selection_defaults(data_dir):
+    s = Settings.load()
+    assert s.selection_hotkey == "ctrl+shift+t"
+    assert s.selection_enabled is True
+
+
+def test_selection_persist(data_dir):
+    s = Settings.load()
+    s.selection_enabled = False
+    s.selection_hotkey = "ctrl+alt+d"
+    s.save()
+    reloaded = Settings.load()
+    assert reloaded.selection_enabled is False
+    assert reloaded.selection_hotkey == "ctrl+alt+d"
