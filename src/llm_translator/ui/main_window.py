@@ -5,7 +5,7 @@ import asyncio
 import threading
 
 from PySide6.QtCore import QEvent, QObject, Qt, QByteArray, QPoint, QRectF, QSize, Signal
-from PySide6.QtGui import QColor, QCursor, QIcon, QKeySequence, QMouseEvent, QPainter, QPen, QPixmap, QShortcut
+from PySide6.QtGui import QAction, QColor, QCursor, QIcon, QKeySequence, QMouseEvent, QPainter, QPen, QPixmap, QShortcut
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication,
@@ -35,6 +35,8 @@ from llm_translator.ui.settings_dialog import SettingsDialog
 from llm_translator.ui.history_dialog import HistoryDialog
 from llm_translator.core.tts import EdgeTtsEngine
 from llm_translator.ui.tts_player import TtsPlayer
+from llm_translator.core.selection import SelectionController
+from llm_translator.ui.selection_popup import SelectionPopup
 
 # 简洁黑白图标，按颜色渲染（小尺寸下也清晰）。
 # 置顶：实心图钉（圆头 + 锥形针体）
@@ -264,6 +266,9 @@ class MainWindow(QMainWindow):
         self._active_speak_btn: QPushButton | None = None
         self._build_translator()
         self.tts_player = TtsPlayer(EdgeTtsEngine(), self)
+        self._selection_popup: SelectionPopup | None = None
+        self.selection_ctrl = SelectionController(self.settings, self)
+        self.selection_ctrl.captured.connect(self._show_selection_popup)
 
         self._build_ui()
         self._wire_signals()
@@ -332,6 +337,10 @@ class MainWindow(QMainWindow):
         self._main_menu = menu = QMenu(self)  # 父对象 = 主窗口 + 存引用，避免无主 QMenu 被 GC 回收
         menu.addAction("设置", self.on_settings)
         menu.addAction("历史记录", self.open_history)
+        self._selection_action = QAction("划词翻译 (Ctrl+Shift+T)", self)
+        self._selection_action.setCheckable(True)
+        self._selection_action.setChecked(self.settings.selection_enabled)
+        menu.addAction(self._selection_action)
         menu.addAction("关于", self.on_about)
         self.menu_btn.setMenu(menu)
         for w in (self.tray_min_btn, self.pin_btn, self.menu_btn):
@@ -439,6 +448,7 @@ class MainWindow(QMainWindow):
         self.win_max_btn.clicked.connect(self._toggle_maximize)
         self.win_close_btn.clicked.connect(QApplication.quit)
         self.provider_combo.currentIndexChanged.connect(self.on_provider_changed)
+        self._selection_action.toggled.connect(self.on_toggle_selection)
         self.emitter.token_received.connect(self._on_token)
         self.emitter.finished.connect(self._on_finished)
         self.emitter.error.connect(self._on_error)
@@ -631,3 +641,33 @@ class MainWindow(QMainWindow):
 
     def open_history(self) -> None:
         HistoryDialog(self.history, self).exec()
+
+    def on_toggle_selection(self, on: bool) -> None:
+        """开关划词翻译：持久化 + 实时注册/注销热键。"""
+        self.settings.selection_enabled = on
+        self.settings.save()
+        if on:
+            self.selection_ctrl.enable()
+        else:
+            self.selection_ctrl.disable()
+
+    def _show_selection_popup(self, text: str, pos) -> None:
+        """热键取词后：在光标处弹译文明信片并翻译。"""
+        if self.translator is None:
+            QMessageBox.warning(self, "未配置", "请先在设置中配置一个模型。")
+            return
+        if self._selection_popup is None:
+            self._selection_popup = SelectionPopup(self)
+            self._selection_popup.expand_to_main.connect(self._on_expand_to_main)
+        src = self.settings.src_lang
+        tgt = self.settings.tgt_lang
+        self._selection_popup.show_at(pos)
+        self._selection_popup.start_translate(text, src, tgt, self.translator)
+
+    def _on_expand_to_main(self, source: str, target: str) -> None:
+        """弹窗点'展开'：把原文/译文填回主界面并前置。"""
+        self.src_edit.setPlainText(source)
+        self.tgt_edit.setPlainText(target)
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()

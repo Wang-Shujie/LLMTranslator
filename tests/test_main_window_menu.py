@@ -32,4 +32,9 @@ def test_menu_button_keeps_its_menu(qapp, data_dir):
 
     menu = win._main_menu
     assert menu is not None, "菜单按钮的 QMenu 被回收"
-    assert [a.text() for a in menu.actions()] == ["设置", "历史记录", "关于"]
+    assert [a.text() for a in menu.actions()] == [
+        "设置",
+        "历史记录",
+        "划词翻译 (Ctrl+Shift+T)",
+        "关于",
+    ]
