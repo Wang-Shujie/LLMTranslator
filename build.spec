@@ -10,6 +10,9 @@ block_cipher = None
 # 运行时加载，PyInstaller 静态分析看不见，必须整体收集包的 datas/binaries/submodules
 _wasmtime_datas, _wasmtime_binaries, _wasmtime_hi = collect_all("wasmtime")
 
+# edge-tts（TTS 朗读）在 EdgeTtsEngine 内延迟 import，静态分析看不见，整体收集
+_edge_datas, _edge_binaries, _edge_hi = collect_all("edge_tts")
+
 # curl_cffi 自带 impersonate 动态库，需随包
 curl_cffi_binaries = []
 try:
@@ -26,12 +29,13 @@ except ImportError:
 a = Analysis(
     ["src/llm_translator/main.py"],
     pathex=["src"],
-    binaries=[*curl_cffi_binaries, *_wasmtime_binaries],
+    binaries=[*curl_cffi_binaries, *_wasmtime_binaries, *_edge_binaries],
     datas=[
         ("assets/light.qss", "assets"),
         # DeepSeek 网页 PoW 的 WASM（随包；wasmtime/numpy 为可选依赖，需另装 [web]）
         ("src/llm_translator/providers/web/wasm", "llm_translator/providers/web/wasm"),
         *_wasmtime_datas,
+        *_edge_datas,
     ],
     hiddenimports=[
         "curl_cffi",
@@ -40,13 +44,15 @@ a = Analysis(
         "PySide6.QtWebEngineCore",
         "PySide6.QtWebEngineWidgets",
         "PySide6.QtWebEngineQuick",
+        "PySide6.QtMultimedia",
         "qasync",
         "cryptography",
         "numpy",
         # 注册表用 importlib 懒加载 web providers，PyInstaller 静态分析看不见，
-        # 必须显式收集整个 llm_translator 包（含 glm/kimi/deepseek/login_dialog 等）
+        # 必须显式收集整个 llm_translator 包（含 glm/kimi/deepseek/login_dialog/tts 等）
         *collect_submodules("llm_translator"),
         *_wasmtime_hi,
+        *_edge_hi,
     ],
     hookspath=[],
     runtime_hooks=[],
