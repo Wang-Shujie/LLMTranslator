@@ -16,6 +16,8 @@ class Settings:
     enabled_providers: list[str] = field(default_factory=lambda: ["deepseek-api"])
     selection_hotkey: str = "ctrl+shift+t"
     selection_enabled: bool = True
+    ocr_hotkey: str = "ctrl+shift+o"
+    ocr_enabled: bool = True
 
     @classmethod
     def load(cls) -> "Settings":

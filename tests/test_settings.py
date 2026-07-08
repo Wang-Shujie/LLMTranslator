@@ -35,3 +35,19 @@ def test_selection_persist(data_dir):
     reloaded = Settings.load()
     assert reloaded.selection_enabled is False
     assert reloaded.selection_hotkey == "ctrl+alt+d"
+
+
+def test_ocr_defaults(data_dir):
+    s = Settings.load()
+    assert s.ocr_hotkey == "ctrl+shift+o"
+    assert s.ocr_enabled is True
+
+
+def test_ocr_persist(data_dir):
+    s = Settings.load()
+    s.ocr_enabled = False
+    s.ocr_hotkey = "ctrl+alt+o"
+    s.save()
+    reloaded = Settings.load()
+    assert reloaded.ocr_enabled is False
+    assert reloaded.ocr_hotkey == "ctrl+alt+o"
