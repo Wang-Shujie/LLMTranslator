@@ -33,6 +33,8 @@ from llm_translator.storage.settings import Settings
 from llm_translator.ui.async_bridge import TokenEmitter
 from llm_translator.ui.settings_dialog import SettingsDialog
 from llm_translator.ui.history_dialog import HistoryDialog
+from llm_translator.core.tts import EdgeTtsEngine
+from llm_translator.ui.tts_player import TtsPlayer
 
 # 简洁黑白图标，按颜色渲染（小尺寸下也清晰）。
 # 置顶：实心图钉（圆头 + 锥形针体）
@@ -259,7 +261,9 @@ class MainWindow(QMainWindow):
         self.emitter = TokenEmitter()
         self._current_task = None
         self._tray: QSystemTrayIcon | None = None
+        self._active_speak_btn: QPushButton | None = None
         self._build_translator()
+        self.tts_player = TtsPlayer(EdgeTtsEngine(), self)
 
         self._build_ui()
         self._wire_signals()
@@ -380,6 +384,8 @@ class MainWindow(QMainWindow):
         input_row.addWidget(self.src_edit)
         col = QVBoxLayout()
         col.addWidget(self.clear_btn)
+        self.src_speak_btn = QPushButton("🔊 原文")
+        col.addWidget(self.src_speak_btn)
         col.addStretch()
         input_row.addLayout(col)
         body_lay.addLayout(input_row, stretch=5)
@@ -398,6 +404,8 @@ class MainWindow(QMainWindow):
         out_col = QVBoxLayout()
         self.copy_btn = QPushButton("📋 复制")
         out_col.addWidget(self.copy_btn)
+        self.tgt_speak_btn = QPushButton("🔊 译文")
+        out_col.addWidget(self.tgt_speak_btn)
         out_col.addStretch()
         out_row.addLayout(out_col)
         body_lay.addLayout(out_row, stretch=5)
@@ -420,6 +428,10 @@ class MainWindow(QMainWindow):
         self.translate_btn.clicked.connect(self.on_translate)
         self.clear_btn.clicked.connect(lambda: self.src_edit.clear())
         self.copy_btn.clicked.connect(self.on_copy)
+        self.src_speak_btn.clicked.connect(self.on_speak_source)
+        self.tgt_speak_btn.clicked.connect(self.on_speak_target)
+        self.tts_player.state_changed.connect(self._on_tts_state)
+        self.tts_player.error.connect(self._on_tts_error)
         self.swap_btn.clicked.connect(self.on_swap)
         self.pin_btn.toggled.connect(self.on_pin)
         self.tray_min_btn.clicked.connect(self._minimize_to_tray)
@@ -484,6 +496,56 @@ class MainWindow(QMainWindow):
 
     def on_copy(self) -> None:
         QApplication.clipboard().setText(self.tgt_edit.toPlainText())
+
+    def on_speak_source(self) -> None:
+        """朗读原文：点当前在播按钮=停止；否则切换到原文。"""
+        if self._active_speak_btn is self.src_speak_btn:
+            self.tts_player.stop()
+            return
+        text = self.src_edit.toPlainText().strip()
+        if not text:
+            self.status.showMessage("没有可朗读的原文", 2000)
+            return
+        if self._active_speak_btn is not None:  # 切换：先还原旧活动按钮文字
+            self._reset_speak_btn(self._active_speak_btn)
+        self._active_speak_btn = self.src_speak_btn
+        self.tts_player.play(text, self.src_combo.currentData())
+
+    def on_speak_target(self) -> None:
+        """朗读译文：点当前在播按钮=停止；否则切换到译文。"""
+        if self._active_speak_btn is self.tgt_speak_btn:
+            self.tts_player.stop()
+            return
+        text = self.tgt_edit.toPlainText().strip()
+        if not text:
+            self.status.showMessage("没有可朗读的译文", 2000)
+            return
+        if self._active_speak_btn is not None:  # 切换：先还原旧活动按钮文字
+            self._reset_speak_btn(self._active_speak_btn)
+        self._active_speak_btn = self.tgt_speak_btn
+        self.tts_player.play(text, self.tgt_combo.currentData())
+
+    def _on_tts_state(self, state: str) -> None:
+        """按播放状态切换活动按钮的图标/文字。"""
+        btn = self._active_speak_btn
+        if btn is None:
+            return
+        if state == "playing":
+            btn.setText("⏹ 停止")
+        elif state == "loading":
+            btn.setText("⏳ …")
+        elif state == "idle":
+            self._reset_speak_btn(btn)
+            self._active_speak_btn = None
+
+    def _on_tts_error(self, msg: str) -> None:
+        self.status.showMessage(f"朗读失败：{msg}", 5000)
+
+    def _reset_speak_btn(self, btn: QPushButton) -> None:
+        if btn is self.src_speak_btn:
+            btn.setText("🔊 原文")
+        elif btn is self.tgt_speak_btn:
+            btn.setText("🔊 译文")
 
     def on_swap(self) -> None:
         si, ti = self.src_combo.currentIndex(), self.tgt_combo.currentIndex()
