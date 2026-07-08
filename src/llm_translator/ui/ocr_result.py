@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QRect, QRectF
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -49,9 +49,13 @@ class _BaseResultWindow(QWidget):
 
     def eventFilter(self, _obj, event) -> bool:
         from PySide6.QtCore import QEvent
-        if self.isVisible() and event.type() == QEvent.MouseButtonPress:
-            if not self.geometry().contains(event.globalPosition().toPoint()):
-                self.hide()
+        if (
+            self.isVisible()
+            and self.isActiveWindow()
+            and event.type() == QEvent.MouseButtonPress
+            and not self.geometry().contains(event.globalPosition().toPoint())
+        ):
+            self.hide()
         return False
 
     def keyPressEvent(self, event) -> None:
@@ -88,7 +92,7 @@ class OverlayResultWindow(_BaseResultWindow):
 
 
 class CompareResultWindow(_BaseResultWindow):
-    """对照：白底画布按 bbox 画译文（镜像版面），与原图上下对比。"""
+    """对照：上方白底译文画布 + 下方原图，同尺寸上下对比。"""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -98,7 +102,7 @@ class CompareResultWindow(_BaseResultWindow):
     def show_result(self, pixmap: QPixmap, blocks, pos) -> None:
         self._pixmap = pixmap
         self._blocks = blocks
-        self.resize(pixmap.size())
+        self.resize(pixmap.width(), pixmap.height() * 2)
         self.show()
         self.raise_()
         self.update()
@@ -107,12 +111,19 @@ class CompareResultWindow(_BaseResultWindow):
         if self._pixmap is None:
             return
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#ffffff"))
-        for text, (x, y, w, h) in self._blocks:
-            font_size = max(8, min(int(h * 0.7), 20))
+        h = self._pixmap.height()
+        # 上半：白底 + 译文
+        painter.fillRect(0, 0, self.width(), h, QColor("#ffffff"))
+        for text, (x, y, w, hb) in self._blocks:
+            font_size = max(8, min(int(hb * 0.7), 20))
             painter.setFont(QFont("Microsoft YaHei", font_size))
             painter.setPen(QColor("#000000"))
-            painter.drawText(QRect(x + 2, y, w - 4, h), Qt.TextWordWrap | Qt.AlignVCenter, text)
+            painter.drawText(QRect(x + 2, y, w - 4, hb), Qt.TextWordWrap | Qt.AlignVCenter, text)
+        # 下半：原图
+        painter.drawPixmap(0, h, self._pixmap)
+        # 分隔线
+        painter.setPen(QPen(QColor("#d0d0d0"), 1))
+        painter.drawLine(0, h, self.width(), h)
         painter.end()
 
 
