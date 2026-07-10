@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QRect, QRectF
+from PySide6.QtCore import Qt, QRect, QRectF, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -130,10 +130,20 @@ class CompareResultWindow(_BaseResultWindow):
 class OcrDirectPanel(_BaseResultWindow):
     """直接翻译面板：上 OCR 原文，下流式译文。"""
 
+    # 跨线程信号：worker 线程 emit → 主线程更新 QTextEdit（避免直接调用线程不安全）
+    _source_ready = Signal(str)
+    _token_ready = Signal(str)
+    _translation_ready = Signal(str)
+    _error_ready = Signal(str)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("OCR 翻译结果")
         self.resize(420, 360)
+        self._source_ready.connect(self.set_source)
+        self._token_ready.connect(self.append_token)
+        self._translation_ready.connect(self.set_translation)
+        self._error_ready.connect(self.set_error)
         lay = QVBoxLayout(self)
         self._src_edit = QTextEdit()
         self._src_edit.setReadOnly(True)

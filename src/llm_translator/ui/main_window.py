@@ -37,6 +37,10 @@ from llm_translator.core.tts import EdgeTtsEngine
 from llm_translator.ui.tts_player import TtsPlayer
 from llm_translator.core.selection import SelectionController
 from llm_translator.ui.selection_popup import SelectionPopup
+from llm_translator.core.ocr import OcrController, OcrEngine
+from llm_translator.core.screen_capture import grab_screen
+from llm_translator.ui.capture_overlay import CaptureOverlay
+from llm_translator.ui.ocr_result import OverlayResultWindow, CompareResultWindow, OcrDirectPanel
 
 # 简洁黑白图标，按颜色渲染（小尺寸下也清晰）。
 # 置顶：实心图钉（圆头 + 锥形针体）
@@ -243,7 +247,20 @@ class TitleBar(QWidget):
         self._win.showNormal() if self._win.isMaximized() else self._win.showMaximized()
 
 
+class _OcrResultEvent(QEvent):
+    """跨线程传递 OCR + 翻译结果给主线程（worker 线程 postEvent → 主线程 event()）。"""
+
+    def __init__(self, crop_image, blocks, mode):
+        super().__init__(QEvent.User)
+        self.crop_image = crop_image
+        self.blocks = blocks
+        self.mode = mode
+
+
 class MainWindow(QMainWindow):
+    # 跨线程 OCR 错误：worker 线程 emit → 主线程显示状态消息
+    _ocr_error = Signal(str)
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("LLM 翻译")
@@ -269,6 +286,9 @@ class MainWindow(QMainWindow):
         self._selection_popup: SelectionPopup | None = None
         self.selection_ctrl = SelectionController(self.settings, self)
         self.selection_ctrl.captured.connect(self._show_selection_popup)
+        self.ocr_ctrl = OcrController(self.settings, self)
+        self.ocr_ctrl.triggered.connect(self._start_ocr_capture)
+        self._ocr_engine = OcrEngine()
 
         self._build_ui()
         self._wire_signals()
@@ -341,6 +361,10 @@ class MainWindow(QMainWindow):
         self._selection_action.setCheckable(True)
         self._selection_action.setChecked(self.settings.selection_enabled)
         menu.addAction(self._selection_action)
+        self._ocr_action = QAction("截图 OCR (Ctrl+Shift+O)", self)
+        self._ocr_action.setCheckable(True)
+        self._ocr_action.setChecked(self.settings.ocr_enabled)
+        menu.addAction(self._ocr_action)
         menu.addAction("关于", self.on_about)
         self.menu_btn.setMenu(menu)
         for w in (self.tray_min_btn, self.pin_btn, self.menu_btn):
@@ -449,9 +473,11 @@ class MainWindow(QMainWindow):
         self.win_close_btn.clicked.connect(QApplication.quit)
         self.provider_combo.currentIndexChanged.connect(self.on_provider_changed)
         self._selection_action.toggled.connect(self.on_toggle_selection)
+        self._ocr_action.toggled.connect(self.on_toggle_ocr)
         self.emitter.token_received.connect(self._on_token)
         self.emitter.finished.connect(self._on_finished)
         self.emitter.error.connect(self._on_error)
+        self._ocr_error.connect(lambda msg: self.status.showMessage(f"OCR 翻译失败：{msg}", 5000))
         QShortcut(QKeySequence("Ctrl+Return"), self).activated.connect(self.on_translate)
 
     # ---- 动作 ----
@@ -671,3 +697,109 @@ class MainWindow(QMainWindow):
         self.showNormal()
         self.raise_()
         self.activateWindow()
+
+    # ---- 截图 OCR ----
+    def event(self, event):
+        """处理跨线程 OCR 结果事件（worker 线程 postEvent → 主线程渲染）。"""
+        if event.type() == QEvent.User and isinstance(event, _OcrResultEvent):
+            self._on_ocr_result(event.crop_image, event.blocks, event.mode)
+            return True
+        return super().event(event)
+
+    def on_toggle_ocr(self, on: bool) -> None:
+        """开关截图 OCR：持久化 + 实时注册/注销热键。"""
+        self.settings.ocr_enabled = on
+        self.settings.save()
+        if on:
+            self.ocr_ctrl.enable()
+        else:
+            self.ocr_ctrl.disable()
+
+    def _start_ocr_capture(self) -> None:
+        """热键触发：拍冻结帧 → 显示截图覆盖层。"""
+        frozen = grab_screen()
+        self._ocr_overlay = CaptureOverlay(frozen, self)
+        self._ocr_overlay.capture_selected.connect(self._on_ocr_captured)
+        self._ocr_overlay.show()
+
+    def _on_ocr_captured(self, crop_image, mode: str, src: str, tgt: str) -> None:
+        """选区确定：OCR → 翻译 → 按模式渲染。"""
+        if self.translator is None:
+            QMessageBox.warning(self, "未配置", "请先在设置中配置一个模型。")
+            return
+        if mode == "direct":
+            self._ocr_direct(crop_image, src, tgt)
+        else:
+            self._ocr_overlay_translate(crop_image, mode, src, tgt)
+
+    def _ocr_direct(self, crop_image, src: str, tgt: str) -> None:
+        """直接翻译模式：OCR → 整段流式翻译 → 面板显示。"""
+        import asyncio
+        import threading
+        engine = self._ocr_engine
+        translator = self.translator
+        panel = OcrDirectPanel(self)
+        panel.show()
+
+        def worker():
+            async def run():
+                try:
+                    blocks = await asyncio.to_thread(engine.recognize, crop_image)
+                    if not blocks:
+                        panel._error_ready.emit("未识别到文字")
+                        return
+                    ocr_text = "\n".join(b.text for b in blocks)
+                    panel._source_ready.emit(ocr_text)
+                    collected = []
+                    async for tok in translator.translate(ocr_text, src, tgt, save_history=False):
+                        collected.append(tok)
+                        panel._token_ready.emit(tok)
+                    panel._translation_ready.emit("".join(collected))
+                except Exception as e:
+                    panel._error_ready.emit(str(e))
+            asyncio.run(run())
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _ocr_overlay_translate(self, crop_image, mode: str, src: str, tgt: str) -> None:
+        """原地覆盖 / 对照模式：OCR → 逐块并发翻译 → 按模式渲染。"""
+        import threading, asyncio
+        engine = self._ocr_engine
+        translator = self.translator
+
+        def worker():
+            async def run():
+                blocks = await asyncio.to_thread(engine.recognize, crop_image)
+                if not blocks:
+                    return
+                sem = asyncio.Semaphore(8)
+
+                async def one(b):
+                    async with sem:
+                        parts = []
+                        async for tok in translator.translate(b.text, src, tgt, save_history=False):
+                            parts.append(tok)
+                        return "".join(parts)
+
+                translations = await asyncio.gather(*[one(b) for b in blocks])
+                blocks_with_t = list(zip(translations, [b.bbox for b in blocks]))
+                # 在主线程渲染
+                QApplication.instance().postEvent(
+                    self, _OcrResultEvent(crop_image, blocks_with_t, mode)
+                )
+            try:
+                asyncio.run(run())
+            except Exception as e:
+                self._ocr_error.emit(str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_ocr_result(self, crop_image, blocks, mode: str) -> None:
+        """主线程：按模式显示结果窗口。"""
+        if mode == "overlay":
+            pos = self._ocr_overlay.geometry().topLeft() if hasattr(self, "_ocr_overlay") else None
+            win = OverlayResultWindow(self)
+            win.show_result(crop_image, blocks, pos)
+        elif mode == "compare":
+            win = CompareResultWindow(self)
+            win.show_result(crop_image, blocks, None)
