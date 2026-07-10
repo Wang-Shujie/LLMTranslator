@@ -20,6 +20,9 @@ _kb_datas, _kb_binaries, _kb_hi = collect_all("keyboard")
 _rapid_datas, _rapid_binaries, _rapid_hi = collect_all("rapidocr_onnxruntime")
 _ort_datas, _ort_binaries, _ort_hi = collect_all("onnxruntime")
 
+# python-docx（文档翻译）纯 Python，收集子模块
+_docx_datas, _docx_binaries, _docx_hi = collect_all("docx")
+
 # curl_cffi 自带 impersonate 动态库，需随包
 curl_cffi_binaries = []
 try:
@@ -36,7 +39,7 @@ except ImportError:
 a = Analysis(
     ["src/llm_translator/main.py"],
     pathex=["src"],
-    binaries=[*curl_cffi_binaries, *_wasmtime_binaries, *_edge_binaries, *_kb_binaries, *_rapid_binaries, *_ort_binaries],
+    binaries=[*curl_cffi_binaries, *_wasmtime_binaries, *_edge_binaries, *_kb_binaries, *_rapid_binaries, *_ort_binaries, *_docx_binaries],
     datas=[
         ("assets/light.qss", "assets"),
         # DeepSeek 网页 PoW 的 WASM（随包；wasmtime/numpy 为可选依赖，需另装 [web]）
@@ -46,6 +49,7 @@ a = Analysis(
         *_kb_datas,
         *_rapid_datas,
         *_ort_datas,
+        *_docx_datas,
     ],
     hiddenimports=[
         "curl_cffi",
@@ -66,6 +70,7 @@ a = Analysis(
         *_kb_hi,
         *_rapid_hi,
         *_ort_hi,
+        *_docx_hi,
     ],
     hookspath=[],
     runtime_hooks=[],
