@@ -51,3 +51,19 @@ def test_ocr_persist(data_dir):
     reloaded = Settings.load()
     assert reloaded.ocr_enabled is False
     assert reloaded.ocr_hotkey == "ctrl+alt+o"
+
+
+def test_doc_defaults(data_dir):
+    s = Settings.load()
+    assert s.doc_concurrency == 8
+    assert s.doc_output_dir == ""
+
+
+def test_doc_persist(data_dir):
+    s = Settings.load()
+    s.doc_concurrency = 4
+    s.doc_output_dir = "/tmp/out"
+    s.save()
+    reloaded = Settings.load()
+    assert reloaded.doc_concurrency == 4
+    assert reloaded.doc_output_dir == "/tmp/out"

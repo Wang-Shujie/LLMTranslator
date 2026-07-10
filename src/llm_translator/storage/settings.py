@@ -18,6 +18,8 @@ class Settings:
     selection_enabled: bool = True
     ocr_hotkey: str = "ctrl+shift+o"
     ocr_enabled: bool = True
+    doc_concurrency: int = 8
+    doc_output_dir: str = ""
 
     @classmethod
     def load(cls) -> "Settings":
