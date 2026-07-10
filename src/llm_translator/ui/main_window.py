@@ -41,6 +41,7 @@ from llm_translator.core.ocr import OcrController, OcrEngine
 from llm_translator.core.screen_capture import grab_screen
 from llm_translator.ui.capture_overlay import CaptureOverlay
 from llm_translator.ui.ocr_result import OverlayResultWindow, CompareResultWindow, OcrDirectPanel
+from llm_translator.ui.document_dialog import DocumentDialog
 
 # 简洁黑白图标，按颜色渲染（小尺寸下也清晰）。
 # 置顶：实心图钉（圆头 + 锥形针体）
@@ -365,6 +366,7 @@ class MainWindow(QMainWindow):
         self._ocr_action.setCheckable(True)
         self._ocr_action.setChecked(self.settings.ocr_enabled)
         menu.addAction(self._ocr_action)
+        menu.addAction("文档翻译…", self.on_document_translate)
         menu.addAction("关于", self.on_about)
         self.menu_btn.setMenu(menu)
         for w in (self.tray_min_btn, self.pin_btn, self.menu_btn):
@@ -651,6 +653,11 @@ class MainWindow(QMainWindow):
         dlg.exec()
         self._build_translator()
         self._update_status()
+
+    def on_document_translate(self) -> None:
+        """打开文档翻译对话框。"""
+        dlg = DocumentDialog(self.credentials, self.settings, self)
+        dlg.exec()
 
     def on_about(self) -> None:
         from llm_translator import __version__

@@ -37,5 +37,6 @@ def test_menu_button_keeps_its_menu(qapp, data_dir):
         "历史记录",
         "划词翻译 (Ctrl+Shift+T)",
         "截图 OCR (Ctrl+Shift+O)",
+        "文档翻译…",
         "关于",
     ]
