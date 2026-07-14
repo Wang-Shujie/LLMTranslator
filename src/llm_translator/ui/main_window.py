@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 
 from PySide6.QtCore import QEvent, QObject, Qt, QByteArray, QPoint, QRectF, QSize, Signal
-from PySide6.QtGui import QAction, QColor, QCursor, QIcon, QKeySequence, QMouseEvent, QPainter, QPen, QPixmap, QShortcut
+from PySide6.QtGui import QColor, QCursor, QIcon, QKeySequence, QMouseEvent, QPainter, QPen, QPixmap, QShortcut
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication,
@@ -17,7 +18,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QSizeGrip,
     QSystemTrayIcon,
     QToolButton,
     QVBoxLayout,
@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from llm_translator.auth.store import CredentialStore
-from llm_translator.core.language import LANGUAGES
+from llm_translator.core.language import LANGUAGES, selection_target
 from llm_translator.core.translator import Translator
 from llm_translator.providers.registry import all_providers, get_provider
 from llm_translator.storage.history import HistoryStore
@@ -42,6 +42,7 @@ from llm_translator.core.screen_capture import grab_screen
 from llm_translator.ui.capture_overlay import CaptureOverlay
 from llm_translator.ui.ocr_result import OverlayResultWindow, CompareResultWindow, OcrDirectPanel
 from llm_translator.ui.document_dialog import DocumentDialog
+from llm_translator.ui.widgets import ToggleSwitch
 
 # 简洁黑白图标，按颜色渲染（小尺寸下也清晰）。
 # 置顶：实心图钉（圆头 + 锥形针体）
@@ -83,6 +84,13 @@ def _svg_icon(svg_template: str, color: str, size: int = 18) -> QIcon:
     renderer.render(painter, QRectF(0, 0, size, size))
     painter.end()
     return QIcon(pix)
+
+
+def _toggle_label(text: str) -> QLabel:
+    """右下角拨动开关旁的灰色小标签。"""
+    lbl = QLabel(text)
+    lbl.setStyleSheet("color: #999999; font-size: 13px; background: transparent;")
+    return lbl
 
 
 class MenuButton(QPushButton):
@@ -150,18 +158,35 @@ class _RoundedFrame(QFrame):
 
 
 class _ResizeFilter(QObject):
-    """无边框窗口的边缘缩放：装在 QApplication 上，鼠标在窗口边缘 6px 内按下时
-    调用 startSystemResize 由系统接管缩放；并在悬停时换成缩放光标。"""
+    """无边框窗口的边缘缩放：装在 QApplication 上，对所有"无边框 + 非 Tool"的
+    顶层窗口（主窗口、圆角对话框等）生效；划词弹窗等 Qt.Tool 弹层不缩放。
+
+    鼠标在窗口边缘 EDGE px 内按下 → startSystemResize 由系统接管缩放；
+    悬停时换成缩放光标。"""
 
     EDGE = 6
 
-    def __init__(self, window: QMainWindow) -> None:
-        super().__init__(window)
-        self._win = window
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
         self._overriding = False
 
-    def _edges(self, gp: QPoint) -> Qt.Edge:
-        wr = self._win.geometry()
+    def _resizable_win(self, obj):
+        """事件目标 obj 所在的、可缩放的无边框顶层窗口；否则 None。
+
+        用标记属性 `_edge_resizable` 判定（主窗口、RoundedDialog 置 True），
+        避免 PySide6 里 `bool(flags & Qt.Tool)` 等位运算对枚举恒真的陷阱。
+        """
+        if not isinstance(obj, QWidget):
+            return None
+        win = obj.window()
+        if win is None or win.windowHandle() is None:
+            return None
+        if not getattr(win, "_edge_resizable", False):
+            return None
+        return win
+
+    def _edges(self, gp: QPoint, win) -> Qt.Edge:
+        wr = win.geometry()
         e = Qt.Edge(0)
         if 0 <= gp.x() - wr.left() <= self.EDGE:
             e |= Qt.LeftEdge
@@ -186,15 +211,18 @@ class _ResizeFilter(QObject):
             return Qt.SizeVerCursor
         return None
 
-    def eventFilter(self, _obj, event) -> bool:
+    def eventFilter(self, obj, event) -> bool:
         et = event.type()
         if et == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-            edges = self._edges(event.globalPosition().toPoint())
-            if edges and self._win.windowHandle() is not None:
-                self._win.windowHandle().startSystemResize(edges)
-                return True
+            win = self._resizable_win(obj)
+            if win is not None:
+                edges = self._edges(event.globalPosition().toPoint(), win)
+                if edges:
+                    win.windowHandle().startSystemResize(edges)
+                    return True
         elif et == QEvent.MouseMove:
-            cur = self._cursor_for(self._edges(event.globalPosition().toPoint()))
+            win = self._resizable_win(obj)
+            cur = self._cursor_for(self._edges(event.globalPosition().toPoint(), win)) if win else None
             if cur is not None:
                 if not self._overriding:
                     QApplication.setOverrideCursor(QCursor(cur))
@@ -273,6 +301,8 @@ class MainWindow(QMainWindow):
         self.setStyleSheet("QMainWindow { background: transparent; }")
         self.resize(480, 360)
         self.setMinimumSize(380, 300)
+        # 标记为可边缘缩放的无边框窗口（供 _ResizeFilter 识别）
+        self._edge_resizable = True
 
         # 持久化与编排
         self.settings = Settings.load()
@@ -358,15 +388,6 @@ class MainWindow(QMainWindow):
         self._main_menu = menu = QMenu(self)  # 父对象 = 主窗口 + 存引用，避免无主 QMenu 被 GC 回收
         menu.addAction("设置", self.on_settings)
         menu.addAction("历史记录", self.open_history)
-        self._selection_action = QAction("划词翻译 (Ctrl+Shift+T)", self)
-        self._selection_action.setCheckable(True)
-        self._selection_action.setChecked(self.settings.selection_enabled)
-        menu.addAction(self._selection_action)
-        self._ocr_action = QAction("截图 OCR (Ctrl+Shift+O)", self)
-        self._ocr_action.setCheckable(True)
-        self._ocr_action.setChecked(self.settings.ocr_enabled)
-        menu.addAction(self._ocr_action)
-        menu.addAction("文档翻译…", self.on_document_translate)
         menu.addAction("关于", self.on_about)
         self.menu_btn.setMenu(menu)
         for w in (self.tray_min_btn, self.pin_btn, self.menu_btn):
@@ -445,13 +466,40 @@ class MainWindow(QMainWindow):
         out_row.addLayout(out_col)
         body_lay.addLayout(out_row, stretch=5)
 
-        # 状态 + 右下角缩放手柄
+        # 状态 + 右下角功能入口 + 缩放手柄
+        # 顺序（左→右）：文档翻译（动作）→ 划译（小开关）→ 截译（小开关）
         bottom = QHBoxLayout()
+        bottom.setSpacing(4)
         self.status = _Status()
         self.status.setStyleSheet("color: #888; font-size: 12px;")
         bottom.addWidget(self.status)
         bottom.addStretch()
-        bottom.addWidget(QSizeGrip(self), 0, Qt.AlignRight | Qt.AlignBottom)
+
+        # 文档翻译：文字动作按钮（灰，hover 蓝）
+        self._doc_btn = QPushButton("文档翻译")
+        self._doc_btn.setCursor(Qt.PointingHandCursor)
+        self._doc_btn.setToolTip("文档翻译")
+        self._doc_btn.setStyleSheet(
+            "QPushButton { border: none; background: transparent; color: #999999; "
+            "font-size: 13px; padding: 2px 6px; }"
+            "QPushButton:hover { color: #1890ff; }"
+        )
+        bottom.addWidget(self._doc_btn)
+        bottom.addSpacing(8)
+
+        # 划译：标签 + 百度同款小拨动开关
+        self._selection_btn = ToggleSwitch(checked=self.settings.selection_enabled)
+        self._selection_btn.setToolTip("划词翻译（选中文字 + Ctrl+Shift+T）")
+        bottom.addWidget(_toggle_label("划译"))
+        bottom.addWidget(self._selection_btn)
+        bottom.addSpacing(8)
+
+        # 截译：标签 + 小拨动开关
+        self._ocr_btn = ToggleSwitch(checked=self.settings.ocr_enabled)
+        self._ocr_btn.setToolTip("截图翻译（Ctrl+Shift+O）")
+        bottom.addWidget(_toggle_label("截译"))
+        bottom.addWidget(self._ocr_btn)
+
         body_lay.addLayout(bottom)
         self._update_status()
 
@@ -474,8 +522,9 @@ class MainWindow(QMainWindow):
         self.win_max_btn.clicked.connect(self._toggle_maximize)
         self.win_close_btn.clicked.connect(QApplication.quit)
         self.provider_combo.currentIndexChanged.connect(self.on_provider_changed)
-        self._selection_action.toggled.connect(self.on_toggle_selection)
-        self._ocr_action.toggled.connect(self.on_toggle_ocr)
+        self._selection_btn.toggled.connect(self.on_toggle_selection)
+        self._ocr_btn.toggled.connect(self.on_toggle_ocr)
+        self._doc_btn.clicked.connect(self.on_document_translate)
         self.emitter.token_received.connect(self._on_token)
         self.emitter.finished.connect(self._on_finished)
         self.emitter.error.connect(self._on_error)
@@ -652,7 +701,25 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self.credentials, self.settings, self)
         dlg.exec()
         self._build_translator()
+        # 设置里可能改了快捷键 / 开关 / 默认语言 → 重新注册热键并同步右下角按钮
+        self._reload_hotkeys()
         self._update_status()
+
+    def _reload_hotkeys(self) -> None:
+        """设置对话框关闭后：按最新设置重新注册全局热键 + 同步字符按钮勾选。"""
+        self.selection_ctrl.disable()
+        self.ocr_ctrl.disable()
+        if self.settings.selection_enabled:
+            self.selection_ctrl.enable()
+        if self.settings.ocr_enabled:
+            self.ocr_ctrl.enable()
+        for btn, on in (
+            (self._selection_btn, self.settings.selection_enabled),
+            (self._ocr_btn, self.settings.ocr_enabled),
+        ):
+            btn.blockSignals(True)
+            btn.setChecked(on)
+            btn.blockSignals(False)
 
     def on_document_translate(self) -> None:
         """打开文档翻译对话框。"""
@@ -676,7 +743,11 @@ class MainWindow(QMainWindow):
         HistoryDialog(self.history, self).exec()
 
     def on_toggle_selection(self, on: bool) -> None:
-        """开关划词翻译：持久化 + 实时注册/注销热键。"""
+        """右下角"划词"按钮开关：持久化 + 实时注册/注销热键。"""
+        self._apply_selection_enabled(on)
+
+    def _apply_selection_enabled(self, on: bool) -> None:
+        """统一落地：持久化 + 注册/注销全局热键。"""
         self.settings.selection_enabled = on
         self.settings.save()
         if on:
@@ -684,18 +755,37 @@ class MainWindow(QMainWindow):
         else:
             self.selection_ctrl.disable()
 
+    def _on_popup_toggle_selection(self, on: bool) -> None:
+        """弹窗内拨动"划词"开关：落地 + 同步右下角按钮（屏蔽信号避免重复触发）。"""
+        self._apply_selection_enabled(on)
+        self._selection_btn.blockSignals(True)
+        self._selection_btn.setChecked(on)
+        self._selection_btn.blockSignals(False)
+
     def _show_selection_popup(self, text: str, pos) -> None:
         """热键取词后：在光标处弹译文明信片并翻译。"""
+        # 多行选区：换行/连续空白规范为单个空格。内嵌换行会让翻译 prompt 的"指令+原文"
+        # 边界模糊，模型/provider 处理不稳定（常不返回有效译文）→ 弹窗卡住不翻译。
+        text = re.sub(r"\s+", " ", text).strip()
         if self.translator is None:
             QMessageBox.warning(self, "未配置", "请先在设置中配置一个模型。")
             return
         if self._selection_popup is None:
-            self._selection_popup = SelectionPopup(self)
+            # parent=None：作为独立的 Tool 顶层窗口，避免 show/activate 连带抬升主窗口
+            self._selection_popup = SelectionPopup(None)
             self._selection_popup.expand_to_main.connect(self._on_expand_to_main)
-        src = self.settings.src_lang
-        tgt = self.settings.tgt_lang
-        self._selection_popup.show_at(pos)
-        self._selection_popup.start_translate(text, src, tgt, self.translator)
+            self._selection_popup.toggle_selection.connect(self._on_popup_toggle_selection)
+        # 同步全局划词开关状态到弹窗（用户可能在菜单里关过）
+        self._selection_popup.set_selection_enabled(self.settings.selection_enabled)
+        # 划词翻译：源语言自动检测。文本非默认语言 → 译为默认语言；
+        # 已是默认语言 → 不翻译，弹窗原样显示原文。
+        tgt = selection_target(text, self.settings.selection_default_lang)
+        if tgt is None:
+            self._selection_popup.show_source(text)
+            self._selection_popup.show_at(pos)
+        else:
+            self._selection_popup.start_translate(text, "auto", tgt, self.translator)
+            self._selection_popup.show_at(pos)
 
     def _on_expand_to_main(self, source: str, target: str) -> None:
         """弹窗点'展开'：把原文/译文填回主界面并前置。"""
@@ -725,7 +815,7 @@ class MainWindow(QMainWindow):
     def _start_ocr_capture(self) -> None:
         """热键触发：拍冻结帧 → 显示截图覆盖层。"""
         frozen = grab_screen()
-        self._ocr_overlay = CaptureOverlay(frozen, self)
+        self._ocr_overlay = CaptureOverlay(frozen, self.settings.ocr_default_lang, self)
         self._ocr_overlay.capture_selected.connect(self._on_ocr_captured)
         self._ocr_overlay.show()
 

@@ -32,7 +32,10 @@ class SelectionController(QObject):
         import keyboard  # 延迟导入：缺依赖/打包时顶层不崩
         hk = self._settings.selection_hotkey
         try:
-            keyboard.add_hotkey(hk, self._on_hotkey_thread)
+            # suppress=True：吞掉原按键，不发给前台程序。否则热键（如 ctrl+d）会
+            # 同时触发浏览器自身快捷键（Ctrl+D=加书签）→ 抢焦点/丢选区，导致随后
+            # 模拟的 ctrl+c 复制到错误的文本（选中 ≠ 翻译）。
+            keyboard.add_hotkey(hk, self._on_hotkey_thread, suppress=True)
             self._hotkey = hk
         except Exception:
             self._hotkey = None  # 注册失败（被占用等）→ 不崩，功能不可用
@@ -52,10 +55,14 @@ class SelectionController(QObject):
         self.triggered.emit()
 
     def _on_triggered(self) -> None:
-        # 主线程：保存原剪贴板 → 模拟 Ctrl+C → 延迟读 + 还原
+        # 主线程：保存原剪贴板 → 清空（哨兵）→ 模拟 Ctrl+C → 延迟读 + 还原
         clip = QGuiApplication.clipboard()
         self._saved_text = clip.text()
         self._saved_pixmap = clip.pixmap()
+        # 清空剪贴板作哨兵：之后只要非空即说明 ctrl+c 复制到了选区。
+        # 不能用"剪贴板是否变化"判定——当选区恰好等于旧剪贴板（如多行先复制过）
+        # 会假阴性、漏翻。
+        clip.setText("")
         import keyboard
         try:
             keyboard.send("ctrl+c")
@@ -71,5 +78,6 @@ class SelectionController(QObject):
             clip.setPixmap(self._saved_pixmap)
         else:
             clip.setText(self._saved_text)
-        if captured and captured != self._saved_text:
+        # 哨兵法：ctrl+c 前已清空，故 captured 非空 == 取到选区（与旧剪贴板是否相同无关）
+        if captured:
             self.captured.emit(captured, QCursor.pos())

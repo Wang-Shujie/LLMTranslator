@@ -7,7 +7,6 @@ import threading
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -20,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from llm_translator.core.doc_translate import DocumentTranslator, PerParagraphGranularity
 from llm_translator.core.language import LANGUAGES
+from llm_translator.ui.widgets import StyledComboBox
 
 
 class DocumentDialog(QDialog):
@@ -50,8 +50,8 @@ class DocumentDialog(QDialog):
 
         # 语言
         row2 = QHBoxLayout()
-        self._src_combo = QComboBox()
-        self._tgt_combo = QComboBox()
+        self._src_combo = StyledComboBox()
+        self._tgt_combo = StyledComboBox()
         for code, name in LANGUAGES.items():
             self._src_combo.addItem(name, code)
             self._tgt_combo.addItem(name, code)

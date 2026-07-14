@@ -26,15 +26,15 @@ def _buttons(dlg) -> list[str]:
 
 def test_switching_panels_does_not_leave_orphan_buttons(qapp, data_dir):
     dlg = SettingsDialog(CredentialStore(), Settings())
-    # 行顺序：deepseek-api, glm-api, openai（API）；glm-web, kimi-web, deepseek-web（网页）
-    dlg.list_widget.setCurrentRow(0); qapp.processEvents()
+    # 引擎顺序：deepseek-api, glm-api, openai（API）；glm-web, kimi-web, deepseek-web（网页）
+    dlg.engine_combo.setCurrentIndex(0); qapp.processEvents()
     assert _buttons(dlg) == ["保存", "测试连接"]
 
-    dlg.list_widget.setCurrentRow(3); qapp.processEvents()  # glm-web
+    dlg.engine_combo.setCurrentIndex(3); qapp.processEvents()  # glm-web
     assert _buttons(dlg) == ["登录", "清除登录"]  # 不应残留 保存/测试连接
 
-    dlg.list_widget.setCurrentRow(4); qapp.processEvents()  # kimi-web
+    dlg.engine_combo.setCurrentIndex(4); qapp.processEvents()  # kimi-web
     assert _buttons(dlg) == ["登录", "清除登录"]
 
-    dlg.list_widget.setCurrentRow(1); qapp.processEvents()  # 切回 API
+    dlg.engine_combo.setCurrentIndex(1); qapp.processEvents()  # 切回 API
     assert _buttons(dlg) == ["保存", "测试连接"]

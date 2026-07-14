@@ -10,3 +10,6 @@ installer_output/
 .pytest_cache/
 *.db
 secrets.enc
+
+# 划词调试日志（运行时产物）
+selection_debug.log

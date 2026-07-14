@@ -73,7 +73,8 @@ class OcrController(QObject):
         import keyboard
         hk = self._settings.ocr_hotkey
         try:
-            keyboard.add_hotkey(hk, self._on_hotkey)
+            # suppress=True：吞掉原按键不发给前台程序，避免热键触发目标程序自身快捷键
+            keyboard.add_hotkey(hk, self._on_hotkey, suppress=True)
             self._hotkey = hk
         except Exception:
             self._hotkey = None

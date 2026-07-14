@@ -32,11 +32,14 @@ def test_menu_button_keeps_its_menu(qapp, data_dir):
 
     menu = win._main_menu
     assert menu is not None, "菜单按钮的 QMenu 被回收"
+    # 划词/文档/截图 已移到右下角字符按钮，菜单只留 设置/历史记录/关于
     assert [a.text() for a in menu.actions()] == [
         "设置",
         "历史记录",
-        "划词翻译 (Ctrl+Shift+T)",
-        "截图 OCR (Ctrl+Shift+O)",
-        "文档翻译…",
         "关于",
     ]
+
+    # 右下角功能入口：文档翻译（动作按钮）+ 划译/截译（ToggleSwitch 小开关）
+    assert win._doc_btn.text() == "文档翻译" and not win._doc_btn.isCheckable()
+    assert win._selection_btn.isChecked() is win.settings.selection_enabled
+    assert win._ocr_btn.isChecked() is win.settings.ocr_enabled

@@ -8,7 +8,6 @@ from PySide6.QtCore import Qt, QPoint, QRect, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap, QPen
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -16,13 +15,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from llm_translator.ui.widgets import StyledComboBox
+
 
 class CaptureOverlay(QWidget):
     """全屏截图选区覆盖层。"""
 
     capture_selected = Signal(QPixmap, str, str, str)  # crop_image, mode, src, tgt
 
-    def __init__(self, frozen: QPixmap, parent=None) -> None:
+    def __init__(self, frozen: QPixmap, default_tgt: str = "en", parent=None) -> None:
         super().__init__(parent)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self._frozen = frozen
@@ -37,16 +38,18 @@ class CaptureOverlay(QWidget):
         self._toolbar.hide()
         tb = QHBoxLayout(self._toolbar)
         tb.setContentsMargins(4, 2, 4, 2)
-        self._src_combo = QComboBox()
+        self._src_combo = StyledComboBox()
         self._src_combo.addItem("自动检测", "auto")
         for code, name in [("zh", "中文"), ("en", "英语"), ("ja", "日语")]:
             self._src_combo.addItem(name, code)
         self._swap_btn = QPushButton("⇌")
         self._swap_btn.setFixedWidth(30)
-        self._tgt_combo = QComboBox()
+        self._tgt_combo = StyledComboBox()
         for code, name in [("zh", "中文"), ("en", "英语"), ("ja", "日语")]:
             self._tgt_combo.addItem(name, code)
-        self._tgt_combo.setCurrentIndex(1)
+        # 初始目标语言读设置（默认英语）；找不到则兜底第 0 项
+        idx = self._tgt_combo.findData(default_tgt)
+        self._tgt_combo.setCurrentIndex(idx if idx >= 0 else 1)
         self._compare_btn = QToolButton()
         self._compare_btn.setText("对照")
         self._compare_btn.setCheckable(True)

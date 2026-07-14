@@ -39,12 +39,31 @@ QPushButton#primaryBtn:hover {
     background: #40a9ff;
 }
 
-QPlainTextEdit {
+/* 单行输入框：圆角 + 细边框 + 聚焦蓝（对标百度） */
+QLineEdit {
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 5px 10px;
+    color: #333333;
+    selection-background-color: #e6f7ff;
+    selection-color: #1890ff;
+}
+QLineEdit:hover { border-color: #b8b8b8; }
+QLineEdit:focus { border-color: #1890ff; }
+QLineEdit:disabled { background: #f7f7f7; color: #bbbbbb; border-color: #ececec; }
+
+/* 多行文本框：同款圆角 + 细边框 + 聚焦蓝 */
+QPlainTextEdit, QTextEdit {
     background: #ffffff;
     border: 1px solid #e0e0e0;
     border-radius: 8px;
-    padding: 12px;
+    padding: 10px;
+    selection-background-color: #e6f7ff;
+    selection-color: #1890ff;
 }
+QPlainTextEdit:hover, QTextEdit:hover { border-color: #b8b8b8; }
+QPlainTextEdit:focus, QTextEdit:focus { border-color: #1890ff; }
 
 QLabel#secondary {
     color: #666666;
@@ -54,3 +73,46 @@ QListWidget::item:selected {
     background: #e6f7ff;
     color: #1890ff;
 }
+
+/* 滚动条：细（10px）、无箭头按钮、圆角灰滑块（对标百度） */
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 2px 0px 2px 0px;
+    border: none;
+}
+QScrollBar::handle:vertical {
+    background: #c8c8c8;
+    border-radius: 4px;
+    min-height: 30px;
+}
+QScrollBar::handle:vertical:hover { background: #a6a6a6; }
+QScrollBar::handle:vertical:pressed { background: #909090; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+    width: 0px;
+    border: none;
+    background: none;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+
+QScrollBar:horizontal {
+    background: transparent;
+    height: 10px;
+    margin: 0px 2px 0px 2px;
+    border: none;
+}
+QScrollBar::handle:horizontal {
+    background: #c8c8c8;
+    border-radius: 4px;
+    min-width: 30px;
+}
+QScrollBar::handle:horizontal:hover { background: #a6a6a6; }
+QScrollBar::handle:horizontal:pressed { background: #909090; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    height: 0px;
+    width: 0px;
+    border: none;
+    background: none;
+}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
