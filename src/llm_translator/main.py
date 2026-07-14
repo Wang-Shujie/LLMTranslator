@@ -20,6 +20,13 @@ def main() -> int:
     if qss.exists():
         app.setStyleSheet(qss.read_text(encoding="utf-8"))
 
+    # 应用图标（标题栏/任务栏/Alt-Tab）
+    from PySide6.QtGui import QIcon
+    from llm_translator.storage.paths import icon_file
+    ico = icon_file()
+    if ico.exists():
+        app.setWindowIcon(QIcon(str(ico)))
+
     # 安装 qasync loop
     import qasync  # type: ignore
     loop = qasync.QEventLoop(app)

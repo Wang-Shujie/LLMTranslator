@@ -655,7 +655,7 @@ class MainWindow(QMainWindow):
             if not QSystemTrayIcon.isSystemTrayAvailable():
                 self._tray = None
                 return
-            self._tray = QSystemTrayIcon(_svg_icon(_PIN_SVG, "#1890ff", 32), self)
+            self._tray = QSystemTrayIcon(self.windowIcon(), self)
             self._tray.setToolTip("LLMTranslator")
             menu = QMenu(self)
             menu.addAction("显示主窗口", self._restore_from_tray)

@@ -42,6 +42,8 @@ a = Analysis(
     binaries=[*curl_cffi_binaries, *_wasmtime_binaries, *_edge_binaries, *_kb_binaries, *_rapid_binaries, *_ort_binaries, *_docx_binaries],
     datas=[
         ("assets/light.qss", "assets"),
+        # 应用图标（icon.jpg 源 + icon.ico 多尺寸；运行时与 exe 图标共用）
+        ("src/icon", "icon"),
         # DeepSeek 网页 PoW 的 WASM（随包；wasmtime/numpy 为可选依赖，需另装 [web]）
         ("src/llm_translator/providers/web/wasm", "llm_translator/providers/web/wasm"),
         *_wasmtime_datas,
@@ -90,7 +92,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
-    icon=None,
+    icon="src/icon/icon.ico",
 )
 
 coll = COLLECT(
