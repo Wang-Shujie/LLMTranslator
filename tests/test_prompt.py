@@ -24,3 +24,11 @@ def test_user_content_carries_text():
 def test_auto_source_uses_phrasing():
     msgs = build_messages("hello", src="auto", tgt="zh")
     assert isinstance(msgs, list) and len(msgs) >= 2
+
+
+def test_context_does_not_say_do_not_translate():
+    """带上下文：措辞不应出现"do NOT translate"（会让 LLM 对同文本困惑不翻）。"""
+    msgs = build_messages("Open", src="auto", tgt="zh", context="Open Settings\nClose")
+    assert "for context" in msgs[1]["content"]
+    assert "Translate ONLY this segment" in msgs[1]["content"]
+    assert "do NOT translate" not in msgs[1]["content"]

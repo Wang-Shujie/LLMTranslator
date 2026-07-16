@@ -64,14 +64,14 @@ class DeepSeekWebProvider(WebProviderBase):
             "x-client-version": "1.0.0-always",
         }
 
-    async def translate(self, text: str, src: str, tgt: str) -> AsyncGenerator[str, None]:
+    async def translate(self, text: str, src: str, tgt: str, context: str = "") -> AsyncGenerator[str, None]:
         self._require_curl_cffi()
         from curl_cffi.requests import AsyncSession  # type: ignore
         from llm_translator.providers.web.pow import solve_challenge
 
         headers = self._headers()
         # DeepSeek 网页 completion 只接受单条 prompt，把翻译指令与原文合并
-        prompt = "\n\n".join(m["content"] for m in build_messages(text, src, tgt))
+        prompt = "\n\n".join(m["content"] for m in build_messages(text, src, tgt, context=context))
 
         async with AsyncSession(impersonate=_IMPERSONATE) as s:
             # 1) 创建会话

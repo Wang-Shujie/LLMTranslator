@@ -91,12 +91,12 @@ class GlmWebProvider(WebProviderBase):
                             text += t
         return text
 
-    async def translate(self, text: str, src: str, tgt: str) -> AsyncGenerator[str, None]:
+    async def translate(self, text: str, src: str, tgt: str, context: str = "") -> AsyncGenerator[str, None]:
         self._require_curl_cffi()
         from curl_cffi.requests import AsyncSession  # type: ignore
 
         refresh_token = self.get_credential("token")
-        prompt = "\n\n".join(m["content"] for m in build_messages(text, src, tgt))
+        prompt = "\n\n".join(m["content"] for m in build_messages(text, src, tgt, context=context))
 
         async with AsyncSession(impersonate="chrome120") as s:
             # 1) refresh_token 换 access_token

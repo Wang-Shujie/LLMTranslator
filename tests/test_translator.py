@@ -12,7 +12,7 @@ class _FakeProvider:
         self.logged_in = False
     async def login(self):
         self.logged_in = True
-    async def translate(self, text, src, tgt):
+    async def translate(self, text, src, tgt, context=""):
         for tok in ["Hel", "lo"]:
             yield tok
     def health(self):

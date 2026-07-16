@@ -17,13 +17,13 @@ class Translator:
         self.provider = provider
         self.provider_label = label
 
-    async def translate(self, text: str, src: str, tgt: str, save_history: bool = True) -> AsyncGenerator[str, None]:
+    async def translate(self, text: str, src: str, tgt: str, save_history: bool = True, context: str = "") -> AsyncGenerator[str, None]:
         text = text.strip()
         if not text:
             return
         await self.provider.login()
         collected: list[str] = []
-        async for token in self.provider.translate(text, src, tgt):
+        async for token in self.provider.translate(text, src, tgt, context=context):
             collected.append(token)
             yield token
         # 流结束后落库（划词弹窗等临时查询可传 save_history=False 跳过）

@@ -35,6 +35,7 @@ from llm_translator.ui.settings_dialog import SettingsDialog
 from llm_translator.ui.history_dialog import HistoryDialog
 from llm_translator.core.tts import EdgeTtsEngine
 from llm_translator.ui.tts_player import TtsPlayer
+from llm_translator.core.hotkey import GlobalHotkeyManager, WM_HOTKEY
 from llm_translator.core.selection import SelectionController
 from llm_translator.ui.selection_popup import SelectionPopup
 from llm_translator.core.ocr import OcrController, OcrEngine
@@ -279,11 +280,12 @@ class TitleBar(QWidget):
 class _OcrResultEvent(QEvent):
     """跨线程传递 OCR + 翻译结果给主线程（worker 线程 postEvent → 主线程 event()）。"""
 
-    def __init__(self, crop_image, blocks, mode):
+    def __init__(self, crop_image, blocks, mode, pos=None):
         super().__init__(QEvent.User)
         self.crop_image = crop_image
         self.blocks = blocks
         self.mode = mode
+        self.pos = pos
 
 
 class MainWindow(QMainWindow):
@@ -315,9 +317,10 @@ class MainWindow(QMainWindow):
         self._build_translator()
         self.tts_player = TtsPlayer(EdgeTtsEngine(), self)
         self._selection_popup: SelectionPopup | None = None
-        self.selection_ctrl = SelectionController(self.settings, self)
+        self.hotkey_mgr = GlobalHotkeyManager()
+        self.selection_ctrl = SelectionController(self.settings, self.hotkey_mgr, self)
         self.selection_ctrl.captured.connect(self._show_selection_popup)
-        self.ocr_ctrl = OcrController(self.settings, self)
+        self.ocr_ctrl = OcrController(self.settings, self.hotkey_mgr, self)
         self.ocr_ctrl.triggered.connect(self._start_ocr_capture)
         self._ocr_engine = OcrEngine()
 
@@ -799,9 +802,30 @@ class MainWindow(QMainWindow):
     def event(self, event):
         """处理跨线程 OCR 结果事件（worker 线程 postEvent → 主线程渲染）。"""
         if event.type() == QEvent.User and isinstance(event, _OcrResultEvent):
-            self._on_ocr_result(event.crop_image, event.blocks, event.mode)
+            self._on_ocr_result(event.crop_image, event.blocks, event.mode, event.pos)
             return True
         return super().event(event)
+
+    # ---- 全局热键（Windows RegisterHotKey）----
+    def showEvent(self, event):
+        """首次显示后把窗口 HWND 交给热键管理器，触发待注册热键的实际注册。"""
+        super().showEvent(event)
+        if not getattr(self, "_hwnd_bound", False):
+            self.hotkey_mgr.set_hwnd(int(self.winId()))
+            self._hwnd_bound = True
+
+    def nativeEvent(self, eventType, message):
+        """Windows：拦截 WM_HOTKEY，按 id 分发给热键管理器。"""
+        if eventType == b"windows_generic_MSG":
+            try:
+                from ctypes import wintypes
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == WM_HOTKEY:
+                    self.hotkey_mgr.dispatch_wm_hotkey(int(msg.wParam))
+                    return True, 0
+            except Exception:
+                pass
+        return super().nativeEvent(eventType, message)
 
     def on_toggle_ocr(self, on: bool) -> None:
         """开关截图 OCR：持久化 + 实时注册/注销热键。"""
@@ -816,18 +840,69 @@ class MainWindow(QMainWindow):
         """热键触发：拍冻结帧 → 显示截图覆盖层。"""
         frozen = grab_screen()
         self._ocr_overlay = CaptureOverlay(frozen, self.settings.ocr_default_lang, self)
-        self._ocr_overlay.capture_selected.connect(self._on_ocr_captured)
+        self._ocr_overlay.translate_requested.connect(self._on_ocr_translate_request)
         self._ocr_overlay.show()
 
-    def _on_ocr_captured(self, crop_image, mode: str, src: str, tgt: str) -> None:
-        """选区确定：OCR → 翻译 → 按模式渲染。"""
+    def _on_ocr_translate_request(self, crop_image, src: str, tgt: str) -> None:
+        """覆盖层点"翻译"：OCR + 逐块翻译 → 回调 overlay.apply_translation 原位渲染。"""
         if self.translator is None:
             QMessageBox.warning(self, "未配置", "请先在设置中配置一个模型。")
+            if hasattr(self, "_ocr_overlay"):
+                self._ocr_overlay.reset_translate()
             return
-        if mode == "direct":
-            self._ocr_direct(crop_image, src, tgt)
-        else:
-            self._ocr_overlay_translate(crop_image, mode, src, tgt)
+        import threading, asyncio
+        engine = self._ocr_engine
+        translator = self.translator
+
+        def worker():
+            async def run():
+                try:
+                    raw_blocks = await asyncio.to_thread(engine.recognize, crop_image)
+                    if not raw_blocks:
+                        QApplication.instance().postEvent(
+                            self, _OcrResultEvent(crop_image, [], "inplace", None))
+                        return
+                    # 合并同一行的碎片块（RapidOCR 常逐词/逐段拆，合并后每块=一整行，
+                    # 减少分段错误 + 翻译更连贯）
+                    from llm_translator.core.ocr import merge_line_blocks
+                    blocks = merge_line_blocks(raw_blocks)
+                    if not blocks:
+                        QApplication.instance().postEvent(
+                            self, _OcrResultEvent(crop_image, [], "inplace", None))
+                        return
+                    sem = asyncio.Semaphore(8)
+                    # 给 OCR 文本补英文空格（RapidOCR 对英文常省略词间空格 → LLM 不识别）
+                    import re
+                    def _fix_spaces(t: str) -> str:
+                        t = re.sub(r'([a-z])([A-Z])', r'\1 \2', t)       # camelCase
+                        t = re.sub(r'([,.!?;:])([A-Za-z])', r'\1 \2', t)  # 标点后补空格
+                        return t
+                    fixed_blocks = [type(b)(text=_fix_spaces(b.text), bbox=b.bbox) for b in blocks]
+                    # 拼完整 OCR 文本作为上下文，让每块翻译有全局语境
+                    full_text = "\n".join(b.text for b in fixed_blocks)
+
+                    async def one(b):
+                        async with sem:
+                            parts = []
+                            async for tok in translator.translate(b.text, src, tgt, save_history=False, context=full_text):
+                                parts.append(tok)
+                            return "".join(parts)
+
+                    translations = await asyncio.gather(*[one(b) for b in fixed_blocks])
+                    # 翻译为空 → 保留原文（避免原文被擦掉但无译文）
+                    for i, (trans, b) in enumerate(zip(translations, fixed_blocks)):
+                        if not trans.strip():
+                            translations[i] = b.text
+                    blocks_with_t = list(zip(translations, [b.bbox for b in fixed_blocks]))
+                    QApplication.instance().postEvent(
+                        self, _OcrResultEvent(crop_image, blocks_with_t, "inplace", None))
+                except Exception as e:
+                    self._ocr_error.emit(str(e))
+                    QApplication.instance().postEvent(
+                        self, _OcrResultEvent(crop_image, [], "inplace", None))
+            asyncio.run(run())
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _ocr_direct(self, crop_image, src: str, tgt: str) -> None:
         """直接翻译模式：OCR → 整段流式翻译 → 面板显示。"""
@@ -858,7 +933,7 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _ocr_overlay_translate(self, crop_image, mode: str, src: str, tgt: str) -> None:
+    def _ocr_overlay_translate(self, crop_image, mode: str, src: str, tgt: str, pos) -> None:
         """原地覆盖 / 对照模式：OCR → 逐块并发翻译 → 按模式渲染。"""
         import threading, asyncio
         engine = self._ocr_engine
@@ -880,9 +955,9 @@ class MainWindow(QMainWindow):
 
                 translations = await asyncio.gather(*[one(b) for b in blocks])
                 blocks_with_t = list(zip(translations, [b.bbox for b in blocks]))
-                # 在主线程渲染
+                # 在主线程渲染（pos = 选区在屏幕上的位置，原位覆盖定位用）
                 QApplication.instance().postEvent(
-                    self, _OcrResultEvent(crop_image, blocks_with_t, mode)
+                    self, _OcrResultEvent(crop_image, blocks_with_t, mode, pos)
                 )
             try:
                 asyncio.run(run())
@@ -891,10 +966,13 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_ocr_result(self, crop_image, blocks, mode: str) -> None:
-        """主线程：按模式显示结果窗口。"""
-        if mode == "overlay":
-            pos = self._ocr_overlay.geometry().topLeft() if hasattr(self, "_ocr_overlay") else None
+    def _on_ocr_result(self, crop_image, blocks, mode: str, pos=None) -> None:
+        """主线程：按模式显示结果。"""
+        if mode == "inplace":
+            # 就地翻译：结果回到覆盖层原位渲染
+            if hasattr(self, "_ocr_overlay") and self._ocr_overlay.isVisible():
+                self._ocr_overlay.apply_translation(blocks)
+        elif mode == "overlay":
             win = OverlayResultWindow(self)
             win.show_result(crop_image, blocks, pos)
         elif mode == "compare":

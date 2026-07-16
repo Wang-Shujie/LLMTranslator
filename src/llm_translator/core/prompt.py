@@ -4,7 +4,7 @@ from __future__ import annotations
 from llm_translator.core.language import code_to_name
 
 
-def build_messages(text: str, src: str, tgt: str) -> list[dict[str, str]]:
+def build_messages(text: str, src: str, tgt: str, context: str = "") -> list[dict[str, str]]:
     src_name = code_to_name(src)
     tgt_name = code_to_name(tgt)
     if src == "auto":
@@ -18,7 +18,13 @@ def build_messages(text: str, src: str, tgt: str) -> list[dict[str, str]]:
         f"Output ONLY the translation. Do not add any explanation, notes, or quotation marks. "
         f"Preserve original formatting and line breaks."
     )
-    user = f"Text:\n{text}"
+    if context:
+        user = (
+            f"The following is the full text for context:\n{context}\n\n"
+            f"Translate ONLY this segment:\n{text}"
+        )
+    else:
+        user = f"Text:\n{text}"
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": user},

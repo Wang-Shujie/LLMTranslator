@@ -19,7 +19,7 @@ class Settings:
     selection_default_lang: str = "zh"      # 划译：外文译入此语言；已是此语言则不译
     ocr_hotkey: str = "ctrl+shift+o"
     ocr_enabled: bool = True
-    ocr_default_lang: str = "en"            # 截译工具条默认目标语言
+    ocr_default_lang: str = "zh"            # 截译工具条默认目标语言
     doc_concurrency: int = 8
     doc_output_dir: str = ""
 

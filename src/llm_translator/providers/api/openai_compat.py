@@ -59,12 +59,12 @@ class OpenAICompatProvider(BaseProvider):
         if not self._api_key():
             raise AuthError(f"{self.name} 未配置 API Key")
 
-    async def translate(self, text: str, src: str, tgt: str) -> AsyncGenerator[str, None]:
+    async def translate(self, text: str, src: str, tgt: str, context: str = "") -> AsyncGenerator[str, None]:
         if not self._api_key():
             raise AuthError(f"{self.name} 未配置 API Key")
         payload = {
             "model": self.model,
-            "messages": build_messages(text, src, tgt),
+            "messages": build_messages(text, src, tgt, context=context),
             "stream": True,
             "temperature": 0.3,
         }

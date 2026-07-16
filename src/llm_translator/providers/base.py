@@ -39,7 +39,7 @@ class BaseProvider(ABC):
         """校验/建立登录态。失败抛 AuthError。"""
 
     @abstractmethod
-    async def translate(self, text: str, src: str, tgt: str) -> AsyncGenerator[str, None]:
+    async def translate(self, text: str, src: str, tgt: str, context: str = "") -> AsyncGenerator[str, None]:
         """异步生成器：逐个 yield token。用法 `async for tok in provider.translate(...)`。"""
 
     @abstractmethod

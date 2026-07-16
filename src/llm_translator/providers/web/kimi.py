@@ -43,12 +43,12 @@ class KimiWebProvider(WebProviderBase):
                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
         }
 
-    async def translate(self, text: str, src: str, tgt: str) -> AsyncGenerator[str, None]:
+    async def translate(self, text: str, src: str, tgt: str, context: str = "") -> AsyncGenerator[str, None]:
         self._require_curl_cffi()
         from curl_cffi.requests import AsyncSession  # type: ignore
 
         headers = self._headers()
-        prompt = "\n\n".join(m["content"] for m in build_messages(text, src, tgt))
+        prompt = "\n\n".join(m["content"] for m in build_messages(text, src, tgt, context=context))
 
         async with AsyncSession(impersonate=_IMPERSONATE) as s:
             # 1) 创建会话
